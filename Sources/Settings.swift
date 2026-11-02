@@ -166,6 +166,7 @@ struct CoursesTab: View {
                         Button { add() } label: { Image(systemName: "plus").frame(width: 22, height: 20) }
                         Button { remove() } label: { Image(systemName: "minus").frame(width: 22, height: 20) }.disabled(sel == nil)
                         Spacer()
+                        ImportMenu(s: s)
                     }
                     .buttonStyle(.borderless).padding(6)
                 }
@@ -179,6 +180,7 @@ struct CoursesTab: View {
                             Image(systemName: "books.vertical").font(.system(size: 40)).foregroundStyle(.secondary)
                             Text("還沒有課程").font(.title3)
                             Button("新增第一門課") { add() }.buttonStyle(.borderedProminent)
+                            Text("或用左下角「匯入」：讓 AI 幫你把課表截圖轉好再貼進來").font(.caption).foregroundStyle(.secondary)
                         }
                     } else {
                         Text("從左邊選一門課來編輯").foregroundStyle(.secondary)

@@ -20,6 +20,9 @@ Hover over your MacBook's notch to see your weekly class schedule.
 - Interactive onboarding tour with spotlight (replay in Settings → 一般)
 - Menu bar icon + gear button, launch at login
 
+## For friends
+See [docs/FRIENDS.md](docs/FRIENDS.md) — install the app and import your schedule with an AI prompt.
+
 ## Requirements
 - macOS 14 Sonoma or later
 - Xcode Command Line Tools (`xcode-select --install`)
