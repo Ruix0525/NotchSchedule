@@ -51,7 +51,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "allday": true, "axis": false, "wing": true, "evRemind": false])
+        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "allday": true, "axis": false, "wing": true, "evRemind": false, "weekStart": 0, "weekend": true, "schoolShow": true, "schoolAuto": true])
         NSApp.setActivationPolicy(.accessory)
         store.onSave = { [weak self] in self?.m.reloadSoon() }
         p = Panel(NSHostingView(rootView: Root(m: m, u: u, onMenu: { [weak self] in self?.popMenu() })))
@@ -90,7 +90,10 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         let nc = UNUserNotificationCenter.current(); nc.delegate = self
         if ud.bool(forKey: "noti") { nc.requestAuthorization(options: [.alert, .sound]) { _, _ in } }
         t = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
-        t2 = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.m.tick(); self?.remind() }
+        t2 = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            self?.m.tick(); self?.remind(); self?.autoSchool()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.autoSchool() }
         remind()
     }
 
@@ -159,6 +162,22 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         if ud.bool(forKey: "pop") { show(hold: 5) }
     }
 
+    // 每週自動從 UMN 更新一次學校行事曆
+    var fetchingSchool = false
+    func autoSchool() {
+        guard ud.bool(forKey: "schoolAuto"), !fetchingSchool else { return }
+        if Date().timeIntervalSince1970 - ud.double(forKey: "schoolFetched") < 7 * 86400 { return }
+        fetchingSchool = true
+        Task {
+            let r = try? await UMN.fetchAll()
+            await MainActor.run {
+                if let r { saveSchool(r); self.m.reloadSoon() }
+                else { self.ud.set(Date().timeIntervalSince1970 - 6 * 86400, forKey: "schoolFetched") }  // 失敗: 一天後再試
+                self.fetchingSchool = false
+            }
+        }
+    }
+
     func startTour() {
         u.tour = 0
         show(hold: 3600)
@@ -166,7 +185,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
 
     func sig() -> String {
         ["lead", "pop", "noti", "cal", "allday", "axis", "wing", "evRemind", "hiddenCals", "hiddenTitles", "hiddenIds",
-         "appearance", "accent"]
+         "appearance", "accent", "weekStart", "weekend", "schoolShow"]
             .map { "\(ud.object(forKey: $0) ?? "-")" }.joined(separator: "|")
     }
 

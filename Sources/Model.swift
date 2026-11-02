@@ -91,9 +91,11 @@ final class M: ObservableObject {
         }
     }
 
+    // 本週第一天 (預設週日開始，跟 Google 日曆一樣；設定可改週一)
     var base: Date {
-        let w = cl.component(.weekday, from: now)
-        return cl.date(byAdding: .day, value: -((w + 5) % 7), to: cl.startOfDay(for: now))!
+        let w = cl.component(.weekday, from: now)              // 1 = 週日
+        let back = ud.integer(forKey: "weekStart") == 1 ? (w + 5) % 7 : w - 1
+        return cl.date(byAdding: .day, value: -back, to: cl.startOfDay(for: now))!
     }
     func day(_ i: Int) -> Date { cl.date(byAdding: .day, value: i, to: snap.mon)! }
     func on(_ i: Int) -> [Occ] { snap.byDay[i] ?? [] }
@@ -132,15 +134,28 @@ final class M: ObservableObject {
         let hid = Set(ud.stringArray(forKey: "hiddenCals") ?? [])
         let hT = Set(ud.stringArray(forKey: "hiddenTitles") ?? []), hI = Set(ud.stringArray(forKey: "hiddenIds") ?? [])
         let granted = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+        let showSchool = ud.bool(forKey: "schoolShow")
         q.async { [weak self] in
             guard let self else { return }
             let cl = self.cl
             let (sf, bad) = loadSched()
-            let skip = Set(sf.skip ?? [])
             var o: [Occ] = [], a: [Occ] = []
-            for wk in -1..<3 {                                   // 上週 ~ 下下週
-                for c in sf.classes {
-                    let d = cl.date(byAdding: .day, value: 7 * wk + c.day - 1, to: b0)!
+            // 學校行事曆: 放假日不上課，並顯示在日期下方
+            var skip = Set(sf.skip ?? [])
+            let kc = ["holiday": "#FFB3A7", "term": "#9FE3C1", "exam": "#C9B6F2", "float": "#E3E3E8", "other": "#E3E3E8"]
+            let kz = ["holiday": "放假", "term": "學期", "exam": "考試", "float": "浮動假日", "other": "學校"]
+            for x in sf.school ?? [] {
+                if x.kind == "holiday" { skip.insert(x.date) }
+                guard showSchool, let d = ymd.date(from: x.date) else { continue }
+                a.append(Occ(id: "umn-\(x.date)-\(x.title)", st: d, en: cl.date(byAdding: .day, value: 1, to: d)!,
+                             c: "🎓 " + x.title, n: "UMN 行事曆", k: kz[x.kind] ?? "學校", r: "",
+                             col: Color(hex: kc[x.kind] ?? "#E3E3E8"),
+                             note: x.en + (x.kind == "float" ? "\n教職員的假日，有沒有上課以老師公告為準。" : ""), all: true))
+            }
+            for k in -7..<28 {                                   // 上週 ~ 下下週，一天一天排
+                let d = cl.date(byAdding: .day, value: k, to: b0)!
+                let wd = (cl.component(.weekday, from: d) + 5) % 7 + 1   // 1 = 週一 ... 7 = 週日
+                for c in sf.classes where c.day == wd {
                     let ds = ymd.string(from: d)
                     if let s = sf.termStart, ds < s { continue }
                     if let z = sf.termEnd, ds > z { continue }
@@ -155,7 +170,7 @@ final class M: ObservableObject {
                 let cs = self.es.calendars(for: .event).filter { !hid.contains($0.calendarIdentifier) }
                 if !cs.isEmpty {
                     let p = self.es.predicateForEvents(withStart: cl.date(byAdding: .day, value: -7, to: b0)!,
-                                                       end: cl.date(byAdding: .day, value: 21, to: b0)!, calendars: cs)
+                                                       end: cl.date(byAdding: .day, value: 28, to: b0)!, calendars: cs)
                     for e in self.es.events(matching: p) {
                         let id = "\(e.eventIdentifier ?? "ev")-\(Int(e.startDate.timeIntervalSince1970))"
                         if hT.contains(e.title ?? "") || hI.contains(id) { continue }
@@ -172,7 +187,8 @@ final class M: ObservableObject {
                     }
                 }
             }
-            o.sort { $0.st < $1.st }; a.sort { $0.st < $1.st }
+            o.sort { $0.st < $1.st }
+            a.sort { ($0.id.hasPrefix("umn") ? 0 : 1, $0.st) < ($1.id.hasPrefix("umn") ? 0 : 1, $1.st) }   // 學校日期排前面
             DispatchQueue.main.async {
                 self.bad = bad; self.occs = o; self.alls = a; self.loadedBase = b0
                 self.derive()
@@ -189,11 +205,7 @@ final class M: ObservableObject {
         let t = Theme(dark: ap == 2 || (ap == 0 && sysDark), accent: Color(hex: ud.string(forKey: "accent") ?? "#0A84FF"))
         if t != theme { theme = t }
         var s = Snap()
-        let b = base, w = cl.component(.weekday, from: now)
-        let nextMon = cl.date(byAdding: .day, value: 7, to: b)!
-        // 週末且這週剩下沒有課/活動 -> 直接看下週
-        let home = (w == 1 || w == 7) && !occs.contains { $0.en > now && $0.st < nextMon } ? nextMon : b
-        s.mon = cl.date(byAdding: .day, value: 7 * wkOff, to: home)!
+        s.mon = cl.date(byAdding: .day, value: 7 * wkOff, to: base)!
         let end = cl.date(byAdding: .day, value: 7, to: s.mon)!
         let days = (0..<8).map { cl.date(byAdding: .day, value: $0, to: s.mon)! }
 
@@ -204,7 +216,12 @@ final class M: ObservableObject {
         for o in alls where o.st < end && o.en > s.mon {
             for i in 0..<7 where o.st < days[i + 1] && o.en > days[i] { s.allByDay[i, default: []].append(o) }
         }
-        s.cols = Array(0..<5) + [5, 6].filter { s.byDay[$0] != nil || s.allByDay[$0] != nil }
+        // 週末欄: 開「顯示週六日」就一直顯示，關掉的話有活動才出現
+        let showWE = ud.bool(forKey: "weekend")
+        s.cols = (0..<7).filter { i in
+            let wd = cl.component(.weekday, from: days[i])
+            return showWE || (wd != 1 && wd != 7) || s.byDay[i] != nil || s.allByDay[i] != nil
+        }
         let wmap: [Int: CGFloat] = [5: 720, 6: 820, 7: 920]
         s.panelW = wmap[s.cols.count] ?? 720
         s.allMax = s.cols.map { min(s.allByDay[$0]?.count ?? 0, M.chipMax + 1) }.max() ?? 0
@@ -222,13 +239,18 @@ final class M: ObservableObject {
             flush()
         }
 
-        // 時間軸範圍
+        // 時間軸範圍 (今天在畫面上的話，一定包含「現在」)
         let timed = s.cols.flatMap { s.byDay[$0] ?? [] }
+        var a0 = 8, z0 = 18
         if !timed.isEmpty {
-            let a = timed.map { cl.component(.hour, from: $0.st) }.min()!
-            let z = timed.map { cl.component(.hour, from: $0.en) + (cl.component(.minute, from: $0.en) > 0 ? 1 : 0) }.max()!
-            s.hours = (min(a, 8), min(max(z, a + 4, 18), 24))
+            a0 = min(timed.map { cl.component(.hour, from: $0.st) }.min()!, 8)
+            z0 = max(timed.map { cl.component(.hour, from: $0.en) + (cl.component(.minute, from: $0.en) > 0 ? 1 : 0) }.max()!, 18)
         }
+        if s.cols.contains(where: { cl.isDateInToday(days[$0]) }) {
+            let h = cl.component(.hour, from: now)
+            a0 = min(a0, h); z0 = max(z0, h + 1)
+        }
+        s.hours = (max(a0, 0), min(max(z0, a0 + 4), 24))
 
         // 面板高度跟著內容走
         let headH: CGFloat = 20 + CGFloat(s.allMax) * M.chipH

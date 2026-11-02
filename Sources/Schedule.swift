@@ -5,12 +5,21 @@ import AppKit
 // day: 1=一 ... 5=五, 6=六, 7=日
 struct C: Codable { let day: Int; let start, end, code, name, type, room: String; var url: String? = nil }
 
+// 學校行事曆的日期 (從 UMN 抓下來存著，離線也能用)
+struct SchoolDate: Codable, Hashable {
+    let date: String                 // yyyy-MM-dd
+    let title: String                // 中文名稱
+    let en: String                   // 學校原文
+    let kind: String                 // term 學期 / exam 考試 / holiday 放假 / float 浮動假日 / other
+}
+
 struct SFile: Codable {
     var colors: [String: String]
     var classes: [C]
     var termStart: String? = nil
     var termEnd: String? = nil
     var skip: [String]? = nil
+    var school: [SchoolDate]? = nil
 }
 
 let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]

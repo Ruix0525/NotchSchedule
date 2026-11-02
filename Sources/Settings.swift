@@ -90,7 +90,8 @@ final class Store: ObservableObject {
         writeSched(SFile(colors: cols, classes: cls,
                          termStart: termOn ? ymd.string(from: termStart) : nil,
                          termEnd: termOn ? ymd.string(from: termEnd) : nil,
-                         skip: holidays.isEmpty ? nil : holidays.map { ymd.string(from: $0) }))
+                         skip: holidays.isEmpty ? nil : holidays.map { ymd.string(from: $0) },
+                         school: loadSched().0.school))                    // 學校日期保留
         onSave?()
     }
 }
@@ -295,26 +296,37 @@ struct TermTab: View {
     @ObservedObject var s: Store
     @State var pick = Date()
     @State var busy = false
-    @State var found: UMNTerm?
+    @State var msg: String?
     @State var err: String?
+    @State var school: [SchoolDate] = []
+    @AppStorage("schoolAuto") var auto = true
+    @AppStorage("schoolShow") var show = true
+    @AppStorage("schoolFetched") var fetched = 0.0
+    @AppStorage("schoolTerm") var termName = ""
 
+    func reloadSchool() { school = loadSched().0.school ?? [] }
     func fetch() {
-        busy = true; err = nil; found = nil
+        busy = true; err = nil; msg = nil
         Task {
             do {
-                let f = try await UMN.fetch()
-                await MainActor.run { found = f; busy = false }
+                let r = try await UMN.fetchAll()
+                await MainActor.run {
+                    saveSchool(r); s.load(); reloadSchool(); busy = false
+                    msg = "已更新 \(r.term.name)：\(df.string(from: r.term.start)) – \(df.string(from: r.term.end))，共 \(r.dates.count) 個日期"
+                }
             } catch {
                 await MainActor.run { err = error.localizedDescription; busy = false }
             }
         }
     }
-    func apply(_ f: UMNTerm) {
-        s.termStart = f.start
-        s.termEnd = f.end
-        s.termOn = true
-        s.holidays = Array(Set(s.holidays + f.holidays)).sorted()
-        found = nil
+    var upcoming: [SchoolDate] {
+        let t = ymd.string(from: Date())
+        var seen = Set<String>(), out: [SchoolDate] = []
+        for x in school where x.date >= t && !seen.contains(x.title + x.kind) {   // 期末考那種連續的只列第一天
+            seen.insert(x.title + x.kind); out.append(x)
+            if out.count >= 8 { break }
+        }
+        return out
     }
 
     var body: some View {
@@ -324,32 +336,38 @@ struct TermTab: View {
                     Image(systemName: "building.columns.fill").font(.system(size: 22)).foregroundStyle(.secondary)
                     VStack(alignment: .leading, spacing: 2) {
                         Text("University of Minnesota – Twin Cities").fontWeight(.semibold)
-                        Text("從官方行事曆抓本學期的開學日、最後上課日和假日").font(.caption).foregroundStyle(.secondary)
+                        Text(fetched > 0 ? "\(termName) · 上次更新 \(ldf.string(from: Date(timeIntervalSince1970: fetched)))"
+                                         : "從學校官網抓開學、最後上課日、期末考和所有大學假日")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if busy { ProgressView().controlSize(.small) }
-                    Button(busy ? "抓取中…" : "抓取最新日期") { fetch() }.disabled(busy)
+                    Button(busy ? "更新中…" : "立即更新") { fetch() }.disabled(busy)
                 }
-                if let f = found {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(f.name).font(.headline)
-                        Label("上課期間：\(ldf.string(from: f.start)) – \(ldf.string(from: f.end))", systemImage: "calendar")
-                        Label(f.holidays.isEmpty ? "期間內沒有放假日" : "放假：" + f.holidays.map { df.string(from: $0) }.joined(separator: "、"),
-                              systemImage: "sun.max")
-                        HStack {
-                            Link("查看來源網頁", destination: f.src).font(.caption)
-                            Spacer()
-                            Button("取消") { found = nil }
-                            Button("套用") { apply(f) }.buttonStyle(.borderedProminent)
+                Toggle("每週自動更新", isOn: $auto)
+                Toggle("在課表上顯示學校日期（🎓 開頭的小色條）", isOn: $show)
+                if let m = msg { Label(m, systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.caption) }
+                if let e = err { Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.caption) }
+                if !upcoming.isEmpty {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text("接下來的學校日期").font(.caption).foregroundStyle(.secondary)
+                        ForEach(upcoming, id: \.self) { x in
+                            HStack(spacing: 8) {
+                                Text(ymd.date(from: x.date).map { ldf.string(from: $0) } ?? x.date)
+                                    .font(.system(size: 12, design: .monospaced)).frame(width: 170, alignment: .leading)
+                                Text(x.title).font(.system(size: 12, weight: .medium))
+                                if x.kind == "holiday" { Text("不上課").font(.system(size: 10)).padding(.horizontal, 5)
+                                    .background(Capsule().fill(Color.red.opacity(0.15))) }
+                                Spacer()
+                            }
                         }
                     }
-                    .padding(10)
-                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.top, 4)
                 }
-                if let e = err {
-                    Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.caption)
-                }
-            } header: { Text("從學校匯入") }
+            } header: { Text("學校行事曆") } footer: {
+                Text("資料來源：asr.umn.edu（學期日期）與 hr.umn.edu（大學假日）。放假日會自動不顯示課程。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             Section {
                 Toggle("只在學期期間顯示課程", isOn: $s.termOn)
                 if s.termOn {
@@ -360,7 +378,7 @@ struct TermTab: View {
                 Text("放寒暑假時就不會顯示課程，也不會跳「下一堂」提醒。行事曆事件不受影響。")
                     .font(.caption).foregroundStyle(.secondary)
             }
-            Section("放假日（這些日子不顯示課程）") {
+            Section("自己加的放假日（這些日子不顯示課程）") {
                 if s.holidays.isEmpty { Text("還沒有放假日").foregroundStyle(.secondary) }
                 ForEach(s.holidays, id: \.self) { d in
                     HStack {
@@ -380,6 +398,7 @@ struct TermTab: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { reloadSchool() }
     }
 }
 
@@ -495,6 +514,8 @@ struct GeneralTab: View {
     @AppStorage("noti") var noti = true
     @AppStorage("axis") var axis = false
     @AppStorage("wing") var wing = true
+    @AppStorage("weekStart") var weekStart = 0
+    @AppStorage("weekend") var weekend = true
     @State var login = SMAppService.mainApp.status == .enabled
 
     var body: some View {
@@ -525,6 +546,12 @@ struct GeneralTab: View {
                     Text("時間軸").tag(true)
                 }
                 .pickerStyle(.segmented)
+                Picker("每週從", selection: $weekStart) {
+                    Text("週日").tag(0)
+                    Text("週一").tag(1)
+                }
+                .pickerStyle(.segmented)
+                Toggle("顯示週六、週日（關掉的話，週末有活動才會出現）", isOn: $weekend)
                 HStack {
                     Toggle("瀏海倒數（開始前 15 分鐘起，在瀏海兩側顯示）", isOn: $wing)
                     Spacer()

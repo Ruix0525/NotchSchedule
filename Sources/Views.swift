@@ -24,7 +24,8 @@ func dayName(_ d: Date) -> String {
     if c.isDateInTomorrow(d) { return "明天" }
     return "週" + zh[c.component(.weekday, from: d) - 1]
 }
-let wd = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
+let wdf = fm("EEE")
+func wdName(_ d: Date) -> String { wdf.string(from: d).uppercased() }
 
 // MARK: - 只畫路徑的瀏海形狀 (動畫時只改路徑，不重新排版 -> 流暢)
 struct NotchShape: Shape {
@@ -215,6 +216,28 @@ struct AllDayChip: View {
     }
 }
 
+// MARK: - 現在的位置
+struct NowDot: View {
+    var body: some View {
+        Circle().fill(Color.red).frame(width: 10, height: 10)
+            .overlay(Circle().stroke(Color.white, lineWidth: 1.5))
+            .phaseAnimator([false, true]) { v, on in
+                v.shadow(color: .red.opacity(on ? 0.9 : 0.2), radius: on ? 6 : 2)
+            } animation: { _ in .easeInOut(duration: 1.0) }
+    }
+}
+struct NowRow: View {
+    let now: Date
+    var body: some View {
+        HStack(spacing: 4) {
+            NowDot()
+            Text("現在 \(tf.string(from: now))").font(.system(size: 9.5, weight: .bold)).foregroundStyle(.red)
+            Rectangle().fill(Color.red).frame(height: 2)
+        }
+        .frame(height: 14)
+    }
+}
+
 // MARK: - 「+N 個」: 點開看全部全天活動
 struct MoreChip: View {
     let list: [Occ]
@@ -273,7 +296,7 @@ struct DayTop: View {
     var body: some View {
         let d = m.day(i), list = m.allOn(i)
         VStack(spacing: 2) {
-            Text("\(wd[i]) \(df.string(from: d))")
+            Text("\(wdName(d)) \(df.string(from: d))")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Calendar.current.isDateInToday(d) ? m.theme.accent : m.theme.sub)
                 .frame(height: 18)
@@ -291,7 +314,7 @@ struct DayTop: View {
 struct AxisGrid: View {
     @ObservedObject var m: M
     let open: Bool
-    let gut: CGFloat = 22, sp: CGFloat = 6
+    let gut: CGFloat = 34, sp: CGFloat = 6, pad: CGFloat = 8     // pad: 讓最上面的時間數字不被切掉
 
     var target: Int {
         let hr = m.snap.hours
@@ -317,6 +340,7 @@ struct AxisGrid: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         ZStack(alignment: .topLeading) {
                             VStack(spacing: 0) {
+                                Color.clear.frame(height: pad)
                                 ForEach(hr.0..<hr.1, id: \.self) { h in
                                     HStack(alignment: .top, spacing: 0) {
                                         Text(h == 12 ? "12" : "\(h % 12)").font(.system(size: 9)).foregroundStyle(m.theme.sub)
@@ -332,21 +356,30 @@ struct AxisGrid: View {
                                 ForEach(m.on(cs[j])) { o in
                                     let ln = m.snap.lane[o.id] ?? Lane(i: 0, n: 1)
                                     let w = cw / CGFloat(ln.n)
-                                    let y = (m.mod(o.st) - CGFloat(hr.0 * 60)) / 60 * hh
+                                    let y = (m.mod(o.st) - CGFloat(hr.0 * 60)) / 60 * hh + pad
                                     let h = max(CGFloat(o.en.timeIntervalSince(o.st)) / 3600 * hh - 1, 15)
                                     MiniCard(o: o, live: m.isLive(o), past: o.en <= m.now)
                                         .frame(width: w - 1, height: h)
                                         .offset(x: x0 + CGFloat(ln.i) * w, y: y)
                                 }
                             }
+                            // 「現在在這裡」: 整排淡紅線 + 今天那欄粗紅線 + 左邊時間標籤
                             if let j = cs.firstIndex(where: { Calendar.current.isDateInToday(m.day($0)) }) {
-                                let y = (m.mod(m.now) - CGFloat(hr.0 * 60)) / 60 * hh
+                                let y = (m.mod(m.now) - CGFloat(hr.0 * 60)) / 60 * hh + pad
                                 let x = gut + sp + CGFloat(j) * (cw + sp)
-                                Rectangle().fill(Color.red).frame(width: cw, height: 2).offset(x: x, y: y - 1)
-                                Circle().fill(Color.red).frame(width: 8, height: 8).offset(x: x - 4, y: y - 4)
+                                Rectangle().fill(Color.red.opacity(0.3)).frame(width: g.size.width - gut - sp, height: 1)
+                                    .offset(x: gut + sp, y: y - 0.5)
+                                Rectangle().fill(Color.red).frame(width: cw, height: 2.5).offset(x: x, y: y - 1.25)
+                                NowDot().offset(x: x - 5, y: y - 5)
+                                Text(tf.string(from: m.now))
+                                    .font(.system(size: 9.5, weight: .bold)).foregroundStyle(.white)
+                                    .padding(.horizontal, 4).padding(.vertical, 1.5)
+                                    .background(Capsule().fill(Color.red))
+                                    .frame(width: gut + 2, alignment: .leading)
+                                    .offset(x: -2, y: y - 7)
                             }
                         }
-                        .frame(width: g.size.width, height: CGFloat(hr.1 - hr.0) * hh, alignment: .topLeading)
+                        .frame(width: g.size.width, height: CGFloat(hr.1 - hr.0) * hh + pad * 2, alignment: .topLeading)
                     }
                     .onAppear { pr.scrollTo(target, anchor: .top) }
                     .onChange(of: open) { _, v in if v { pr.scrollTo(target, anchor: .top) } }
@@ -365,10 +398,8 @@ struct SchedView: View {
     var onMenu: () -> Void
 
     var weekLabel: String {
-        let a = m.day(0), b = m.day(6), cl = Calendar.current
-        let base = m.base, d = cl.dateComponents([.day], from: base, to: a).day ?? 0
-        let tag = [0: "本週", 7: "下週", -7: "上週", 14: "下下週"][d] ?? ""
-        return "\(df.string(from: a)) – \(df.string(from: b))" + (tag.isEmpty ? "" : "  ·  " + tag)
+        let tag = [0: "本週", 1: "下週", -1: "上週", 2: "下下週"][m.wkOff] ?? ""
+        return "\(df.string(from: m.day(0))) – \(df.string(from: m.day(6)))  ·  \(tag)"
     }
 
     // 上方工具列: 週次 + 換週 + 齒輪 (在選單列下面，不會太貼頂)
@@ -385,6 +416,11 @@ struct SchedView: View {
             Spacer()
             IconBtn(icon: "chevron.left", t: t, help: "上一週", disabled: m.wkOff <= -1) { m.shift(-1) }
             IconBtn(icon: "chevron.right", t: t, help: "下一週", disabled: m.wkOff >= 2) { m.shift(1) }
+            IconBtn(icon: t.dark ? "sun.max.fill" : "moon.fill", t: t, help: t.dark ? "切換成淺色" : "切換成深色") {
+                UserDefaults.standard.set(t.dark ? 1 : 2, forKey: "appearance")
+                m.derive()
+            }
+            .padding(.leading, 4)
             IconBtn(icon: "gearshape.fill", t: t, size: 14, help: "設定", action: onMenu)
                 .tour("gear")
                 .padding(.leading, 4)
@@ -426,9 +462,15 @@ struct SchedView: View {
     var list: some View {
         HStack(alignment: .top, spacing: 8) {
             ForEach(m.snap.cols, id: \.self) { i in
+                let list = m.on(i), today = Calendar.current.isDateInToday(m.day(i))
+                let cut = list.firstIndex { $0.en > m.now } ?? list.count      // 「現在」插在這張卡片前面
                 VStack(spacing: 6) {
                     DayTop(m: m, i: i)
-                    ForEach(m.on(i)) { o in Card(o: o, live: m.isLive(o), past: o.en <= m.now) }
+                    ForEach(Array(list.enumerated()), id: \.element.id) { k, o in
+                        if today && k == cut { NowRow(now: m.now) }
+                        Card(o: o, live: m.isLive(o), past: o.en <= m.now)
+                    }
+                    if today && cut == list.count { NowRow(now: m.now) }
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
             }
