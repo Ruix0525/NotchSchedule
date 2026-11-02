@@ -26,35 +26,53 @@ func dayName(_ d: Date) -> String {
 }
 let wd = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
 
+// MARK: - 只畫路徑的瀏海形狀 (動畫時只改路徑，不重新排版 -> 流暢)
+struct NotchShape: Shape {
+    var w: CGFloat, h: CGFloat, r: CGFloat
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>, CGFloat> {
+        get { AnimatablePair(AnimatablePair(w, h), r) }
+        set { w = newValue.first.first; h = newValue.first.second; r = newValue.second }
+    }
+    func path(in rect: CGRect) -> Path {
+        UnevenRoundedRectangle(bottomLeadingRadius: r, bottomTrailingRadius: r)
+            .path(in: CGRect(x: rect.midX - w / 2, y: 0, width: w, height: h))
+    }
+}
+
 // MARK: - 根視圖: 從瀏海長出來
 struct Root: View {
     @ObservedObject var m: M
     @ObservedObject var u: UI
-    let H: CGFloat
     var onMenu: () -> Void
     static let wingW: CGFloat = 96
 
     var act: Occ? { m.wing ? m.soon : nil }
 
     var body: some View {
-        let o = u.open, a = act, W = m.panelW
+        let o = u.open, a = act, W = m.snap.panelW, H = m.snap.panelH
+        let cw = o ? W : u.nw + (a != nil ? 2 * Root.wingW : 0)
+        let shape = NotchShape(w: cw, h: o ? H : u.nh, r: o ? 22 : 10)
         ZStack(alignment: .top) {
-            if o {
-                SchedView(m: m, top: u.nh, onMenu: onMenu)
-                    .frame(width: W, height: H)
-                    .transition(.opacity)
-            } else if let a {
+            // 背景 + 陰影只畫在形狀上 (便宜)
+            shape.fill(o || a == nil ? Color.white : Color.black)
+                .shadow(color: .black.opacity(o ? 0.22 : 0), radius: 16, y: 8)
+            // 內容一直存在，只用遮罩露出來 -> 打開瞬間不用重建
+            SchedView(m: m, open: o, top: u.nh, onMenu: onMenu)
+                .frame(width: W, height: H)
+                .opacity(o ? 1 : 0)
+                .mask(shape)
+                .allowsHitTesting(o)
+            if let a {
                 Wings(o: a, now: m.now, nw: u.nw, nh: u.nh)
-                    .transition(.opacity)
+                    .frame(width: cw, height: u.nh)
+                    .opacity(o ? 0 : 1)
             }
         }
-        .frame(width: o ? W : u.nw + (a != nil ? 2 * Root.wingW : 0), height: o ? H : u.nh, alignment: .top)
-        .background(o || a == nil ? Color.white : Color.black)
-        .clipShape(UnevenRoundedRectangle(bottomLeadingRadius: o ? 20 : 10, bottomTrailingRadius: o ? 20 : 10))
-        .shadow(color: .black.opacity(o ? 0.22 : 0), radius: 14, y: 6)
-        .opacity(o || a != nil ? 1 : 0)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .animation(.spring(response: 0.36, dampingFraction: 0.82), value: o)
+        .opacity(o || a != nil ? 1 : 0)
+        .animation(.spring(duration: 0.42, bounce: 0.16), value: o)
+        .animation(.spring(duration: 0.35, bounce: 0.1), value: W)
+        .animation(.spring(duration: 0.35, bounce: 0.1), value: H)
         .animation(.easeInOut(duration: 0.3), value: a?.id)
         .environment(\.colorScheme, .light)
     }
@@ -94,7 +112,8 @@ struct Detail: View {
                     if !o.n.isEmpty { Text(o.n).font(.subheadline).foregroundStyle(.secondary) }
                 }
             }
-            Label(o.all ? "\(dayName(o.st)) · 全天" : "\(dayName(o.st)) \(tma(o.st)) – \(tma(o.en))", systemImage: "clock")
+            Label(o.multi ? "\(dayName(o.st)) \(tma(o.st)) → \(dayName(o.en)) \(tma(o.en))"
+                  : o.all ? "\(dayName(o.st)) · 全天" : "\(dayName(o.st)) \(tma(o.st)) – \(tma(o.en))", systemImage: "clock")
             if !o.all && !o.k.isEmpty && o.k != "行事曆" { Label(o.k, systemImage: "tag") }
             if !o.r.isEmpty { Label(o.r, systemImage: "mappin.and.ellipse").lineLimit(3) }
             if let n = o.note, !n.isEmpty {
@@ -178,62 +197,102 @@ struct AllDayChip: View {
     }
 }
 
-// MARK: - 每一欄的標題 (+ 全天事件)
+// MARK: - 齒輪 (大一點、有 hover 回饋)
+struct GearButton: View {
+    var action: () -> Void
+    @State var hov = false
+    var body: some View {
+        Image(systemName: "gearshape.fill")
+            .font(.system(size: 15, weight: .medium))
+            .foregroundStyle(hov ? Color.black.opacity(0.75) : Color.gray)
+            .frame(width: 32, height: 32)
+            .background(Circle().fill(Color.black.opacity(hov ? 0.09 : 0.04)))
+            .contentShape(Circle())
+            .onHover { hov = $0 }
+            .onTapGesture { action() }
+            .help("設定")
+    }
+}
+
+// MARK: - 每一欄的標題 (+ 全天/跨日事件，最多 3 個)
 struct DayTop: View {
     @ObservedObject var m: M
     let i: Int
     var body: some View {
-        let d = m.day(i)
-        VStack(spacing: 3) {
+        let d = m.day(i), list = m.allOn(i)
+        VStack(spacing: 2) {
             Text("\(wd[i]) \(df.string(from: d))")
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(Calendar.current.isDateInToday(d) ? Color.orange : Color.black.opacity(0.6))
-            ForEach(m.allOn(d)) { o in AllDayChip(o: o) }
+                .frame(height: 18)
+            ForEach(list.prefix(M.chipMax)) { o in AllDayChip(o: o).frame(height: M.chipH - 2) }
+            if list.count > M.chipMax {
+                Text("+\(list.count - M.chipMax) 個").font(.system(size: 9.5)).foregroundStyle(.gray).frame(height: M.chipH - 2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .top)
     }
 }
 
-// MARK: - 時間軸
+// MARK: - 時間軸 (可捲動，打開時自動捲到現在)
 struct AxisGrid: View {
     @ObservedObject var m: M
+    let open: Bool
     let gut: CGFloat = 22, sp: CGFloat = 6
 
+    var target: Int {
+        let hr = m.snap.hours
+        let todayShown = m.snap.cols.contains { Calendar.current.isDateInToday(m.day($0)) }
+        let h = todayShown ? Calendar.current.component(.hour, from: m.now) - 1 : 8
+        return min(max(h, hr.0), max(hr.1 - 1, hr.0))
+    }
+
     var body: some View {
-        let hr = m.hours, cs = m.cols
+        let hr = m.snap.hours, cs = m.snap.cols, hh = M.hourH
         VStack(spacing: 4) {
             HStack(alignment: .top, spacing: sp) {
                 Color.clear.frame(width: gut, height: 1)
                 ForEach(cs, id: \.self) { i in DayTop(m: m, i: i) }
             }
             GeometryReader { g in
-                let hh = g.size.height / CGFloat(hr.1 - hr.0)
                 let cw = (g.size.width - gut - sp * CGFloat(cs.count)) / CGFloat(cs.count)
-                ZStack(alignment: .topLeading) {
-                    ForEach(hr.0...hr.1, id: \.self) { h in
-                        Rectangle().fill(Color.black.opacity(0.07)).frame(height: 1)
-                            .offset(y: CGFloat(h - hr.0) * hh)
-                        Text(h == 12 ? "12" : "\(h % 12)").font(.system(size: 9)).foregroundStyle(.gray)
-                            .offset(y: CGFloat(h - hr.0) * hh - 5)
-                    }
-                    ForEach(cs.indices, id: \.self) { j in
-                        let x = gut + sp + CGFloat(j) * (cw + sp)
-                        ForEach(m.on(m.day(cs[j]))) { o in
-                            let y = (m.mod(o.st) - CGFloat(hr.0 * 60)) / 60 * hh
-                            let h = max(CGFloat(o.en.timeIntervalSince(o.st)) / 3600 * hh - 1, 16)
-                            MiniCard(o: o, live: m.isLive(o), past: o.en <= m.now)
-                                .frame(width: cw, height: h)
-                                .offset(x: x, y: y)
+                ScrollViewReader { pr in
+                    ScrollView(.vertical, showsIndicators: false) {
+                        ZStack(alignment: .topLeading) {
+                            VStack(spacing: 0) {
+                                ForEach(hr.0..<hr.1, id: \.self) { h in
+                                    HStack(alignment: .top, spacing: 0) {
+                                        Text(h == 12 ? "12" : "\(h % 12)").font(.system(size: 9)).foregroundStyle(.gray)
+                                            .frame(width: gut, alignment: .leading).offset(y: -5)
+                                        Rectangle().fill(Color.black.opacity(0.07)).frame(height: 1)
+                                    }
+                                    .frame(height: hh, alignment: .top)
+                                    .id(h)
+                                }
+                            }
+                            ForEach(cs.indices, id: \.self) { j in
+                                let x0 = gut + sp + CGFloat(j) * (cw + sp)
+                                ForEach(m.on(cs[j])) { o in
+                                    let ln = m.snap.lane[o.id] ?? Lane(i: 0, n: 1)
+                                    let w = cw / CGFloat(ln.n)
+                                    let y = (m.mod(o.st) - CGFloat(hr.0 * 60)) / 60 * hh
+                                    let h = max(CGFloat(o.en.timeIntervalSince(o.st)) / 3600 * hh - 1, 15)
+                                    MiniCard(o: o, live: m.isLive(o), past: o.en <= m.now)
+                                        .frame(width: w - 1, height: h)
+                                        .offset(x: x0 + CGFloat(ln.i) * w, y: y)
+                                }
+                            }
+                            if let j = cs.firstIndex(where: { Calendar.current.isDateInToday(m.day($0)) }) {
+                                let y = (m.mod(m.now) - CGFloat(hr.0 * 60)) / 60 * hh
+                                let x = gut + sp + CGFloat(j) * (cw + sp)
+                                Rectangle().fill(Color.red).frame(width: cw, height: 2).offset(x: x, y: y - 1)
+                                Circle().fill(Color.red).frame(width: 8, height: 8).offset(x: x - 4, y: y - 4)
+                            }
                         }
+                        .frame(width: g.size.width, height: CGFloat(hr.1 - hr.0) * hh, alignment: .topLeading)
                     }
-                    if let j = cs.firstIndex(where: { Calendar.current.isDateInToday(m.day($0)) }) {
-                        let y = (m.mod(m.now) - CGFloat(hr.0 * 60)) / 60 * hh
-                        let x = gut + sp + CGFloat(j) * (cw + sp)
-                        if y >= 0 && y <= g.size.height {
-                            Rectangle().fill(Color.red).frame(width: cw, height: 2).offset(x: x, y: y - 1)
-                            Circle().fill(Color.red).frame(width: 8, height: 8).offset(x: x - 4, y: y - 4)
-                        }
-                    }
+                    .onAppear { pr.scrollTo(target, anchor: .top) }
+                    .onChange(of: open) { _, v in if v { pr.scrollTo(target, anchor: .top) } }
                 }
             }
         }
@@ -243,6 +302,7 @@ struct AxisGrid: View {
 // MARK: - 展開後的內容
 struct SchedView: View {
     @ObservedObject var m: M
+    let open: Bool
     let top: CGFloat
     var onMenu: () -> Void
 
@@ -250,8 +310,8 @@ struct SchedView: View {
         HStack {
             if let o = m.live {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("● 正在上課").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.orange)
-                    Text("\(o.c) \(o.k)").font(.system(size: 14, weight: .bold))
+                    Text("● 正在進行").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.orange)
+                    Text("\(o.c) \(o.k == "行事曆" ? "" : o.k)").font(.system(size: 14, weight: .bold))
                     Text("\(o.r.isEmpty ? "" : o.r + " · ")\(tma(o.en)) 結束").font(.system(size: 11)).foregroundStyle(.gray)
                 }
                 Spacer()
@@ -259,7 +319,7 @@ struct SchedView: View {
             } else if let o = m.next {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("下一個").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.blue)
-                    Text("\(o.c) \(o.k)").font(.system(size: 14, weight: .bold))
+                    Text("\(o.c) \(o.k == "行事曆" ? "" : o.k)").font(.system(size: 14, weight: .bold))
                     Text("\(dayName(o.st)) \(tma(o.st))\(o.r.isEmpty ? "" : " · " + o.r)").font(.system(size: 11)).foregroundStyle(.gray)
                 }
                 Spacer()
@@ -271,16 +331,16 @@ struct SchedView: View {
         }
         .lineLimit(1)
         .foregroundStyle(.black)
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .background((m.live != nil ? Color.orange : Color.blue).opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 14).frame(height: 64)
+        .background((m.live != nil ? Color.orange : Color.blue).opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
     }
 
     var list: some View {
         HStack(alignment: .top, spacing: 8) {
-            ForEach(m.cols, id: \.self) { i in
+            ForEach(m.snap.cols, id: \.self) { i in
                 VStack(spacing: 6) {
                     DayTop(m: m, i: i)
-                    ForEach(m.on(m.day(i))) { o in Card(o: o, live: m.isLive(o), past: o.en <= m.now) }
+                    ForEach(m.on(i)) { o in Card(o: o, live: m.isLive(o), past: o.en <= m.now) }
                 }
                 .frame(maxWidth: .infinity, alignment: .top)
             }
@@ -291,11 +351,11 @@ struct SchedView: View {
         VStack(spacing: 12) {
             if m.bad {
                 Text("⚠️ 課表檔案格式有誤，先顯示範例（齒輪 → 設定）")
-                    .font(.system(size: 11)).foregroundStyle(.red)
+                    .font(.system(size: 11)).foregroundStyle(.red).frame(height: 14)
             }
             banner
             if m.axis {
-                AxisGrid(m: m)
+                AxisGrid(m: m, open: open)
             } else {
                 ScrollView(.vertical, showsIndicators: false) { list }
             }
@@ -303,9 +363,8 @@ struct SchedView: View {
         .padding(.horizontal, 14).padding(.top, top + 8).padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .overlay(alignment: .topTrailing) {
-            Button { onMenu() } label: { Image(systemName: "gearshape.fill").font(.system(size: 13)) }
-                .buttonStyle(.plain).foregroundStyle(.gray)
-                .padding(.top, 8).padding(.trailing, 18)
+            GearButton(action: onMenu)
+                .padding(.top, max((top - 32) / 2, 0)).padding(.trailing, 12)
         }
     }
 }

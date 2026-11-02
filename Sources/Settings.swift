@@ -341,13 +341,13 @@ struct CalTab: View {
         m.requestCal { ok in
             status = EKEventStore.authorizationStatus(for: .event)
             if !ok { calOn = false }
-            m.refresh()
+            m.reloadSoon()
         }
     }
     func toggle(_ id: String, _ v: Bool) {
         if v { hidden.remove(id) } else { hidden.insert(id) }
         UserDefaults.standard.set(Array(hidden), forKey: "hiddenCals")
-        m.refresh()
+        m.reloadSoon()
     }
     func openPane(_ s: String) { if let u = URL(string: s) { NSWorkspace.shared.open(u) } }
 
@@ -357,7 +357,7 @@ struct CalTab: View {
         Form {
             Section {
                 Toggle("在瀏海課表顯示行事曆", isOn: $calOn)
-                    .onChange(of: calOn) { _, v in if v { request() } else { m.refresh() } }
+                    .onChange(of: calOn) { _, v in if v { request() } else { m.reloadSoon() } }
                 Toggle("顯示全天事件", isOn: $allDay).disabled(!calOn)
                 if status == .denied || status == .restricted {
                     HStack {

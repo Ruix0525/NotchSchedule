@@ -23,7 +23,9 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     var entered = false, holdUntil: Date?, hoverAt: Date?, outAt: Date?
     var menu = NSMenu()
     var sent = Set<String>()
-    let H: CGFloat = 500, maxW: CGFloat = 920, pad: CGFloat = 30
+    var lastSig = ""
+    let maxW: CGFloat = 920, pad: CGFloat = 30
+    var maxH: CGFloat { (scr.frame.height * 0.82).rounded() }
 
     var scr: NSScreen { NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main! }
     var nw: CGFloat {
@@ -36,34 +38,41 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         let f = scr.frame, w = nw + (m.wing && m.soon != nil ? 2 * Root.wingW : 0)
         return NSRect(x: f.midX - w / 2, y: f.maxY - nh, width: w, height: nh + 2)
     }
-    var full: NSRect { let f = scr.frame, w = m.panelW; return NSRect(x: f.midX - w / 2, y: f.maxY - H, width: w, height: H) }
+    var full: NSRect {
+        let f = scr.frame, w = m.snap.panelW, h = m.snap.panelH
+        return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h)
+    }
 
     func place() {
         let f = scr.frame
-        u.nw = nw; u.nh = nh
-        p.setFrame(NSRect(x: f.midX - maxW / 2 - pad, y: f.maxY - H - pad, width: maxW + 2 * pad, height: H + pad), display: true)
+        u.nw = nw; u.nh = nh; m.nh = nh; m.maxH = maxH
+        p.setFrame(NSRect(x: f.midX - maxW / 2 - pad, y: f.maxY - maxH - pad, width: maxW + 2 * pad, height: maxH + pad), display: true)
+        m.derive()
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "allday": true, "axis": false, "wing": true])
         NSApp.setActivationPolicy(.accessory)
-        m.refresh()
-        store.onSave = { [weak self] in self?.m.refresh() }
-        p = Panel(NSHostingView(rootView: Root(m: m, u: u, H: H, onMenu: { [weak self] in self?.popMenu() })))
+        store.onSave = { [weak self] in self?.m.reloadSoon() }
+        p = Panel(NSHostingView(rootView: Root(m: m, u: u, onMenu: { [weak self] in self?.popMenu() })))
         p.ignoresMouseEvents = true
         place()
         p.orderFrontRegardless()
+        m.reload()
+        lastSig = sig()
         let nc0 = NotificationCenter.default
         nc0.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.place() }
-        // 設定有變 -> 重新整理 + 更新選單勾選
+        // 只有「我們的」設定真的變了才重新整理 (系統常常會發這個通知)
         nc0.addObserver(forName: UserDefaults.didChangeNotification, object: nil, queue: .main) { [weak self] _ in
-            self?.m.refresh(); self?.buildMenu()
+            guard let self else { return }
+            let s = self.sig()
+            if s != self.lastSig { self.lastSig = s; self.m.reloadSoon(); self.buildMenu() }
         }
         buildMenu()
         let nc = UNUserNotificationCenter.current(); nc.delegate = self
         if ud.bool(forKey: "noti") { nc.requestAuthorization(options: [.alert, .sound]) { _, _ in } }
         t = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
-        t2 = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.m.refresh(); self?.remind() }
+        t2 = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in self?.m.tick(); self?.remind() }
         remind()
     }
 
@@ -92,7 +101,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         holdUntil = hold.map { Date().addingTimeInterval($0) }
         entered = false; outAt = nil; hoverAt = nil
         if u.open { return }
-        m.refresh()
+        m.tick()
         p.ignoresMouseEvents = false
         u.open = true
     }
@@ -101,6 +110,11 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         u.open = false
         p.ignoresMouseEvents = true
         hoverAt = nil; outAt = nil
+    }
+
+    func sig() -> String {
+        ["lead", "pop", "noti", "cal", "allday", "axis", "wing", "hiddenCals"]
+            .map { "\(ud.object(forKey: $0) ?? "-")" }.joined(separator: "|")
     }
 
     // MARK: 開始前提醒

@@ -1,4 +1,4 @@
-// 把課表 + 行事曆事件展開成實際時段
+// 資料層: 背景讀取課表 + 行事曆，算好版面再交給畫面 (避免卡頓)
 import SwiftUI
 import EventKit
 
@@ -9,7 +9,23 @@ struct Occ: Identifiable {
     let col: Color
     var url: String? = nil
     var note: String? = nil
-    var all = false                          // 全天事件
+    var all = false                          // 顯示在上方小條 (全天 / 跨日 / 超長)
+    var multi = false                        // 跨日或超長的「有時間」事件
+}
+
+struct Lane { let i, n: Int }                // 重疊事件並排: 第 i 條 / 共 n 條
+
+// 每次資料或時間變動時「一次算好」的版面資料
+struct Snap {
+    var mon = Date()
+    var cols: [Int] = Array(0..<5)
+    var byDay: [Int: [Occ]] = [:]
+    var allByDay: [Int: [Occ]] = [:]
+    var lane: [String: Lane] = [:]
+    var hours = (8, 18)
+    var panelW: CGFloat = 720
+    var panelH: CGFloat = 480
+    var allMax = 0
 }
 
 final class UI: ObservableObject {
@@ -22,44 +38,36 @@ let ymd = fm("yyyy-MM-dd")
 
 final class M: ObservableObject {
     @Published var now = Date()
-    @Published var occs: [Occ] = []          // 有時間的
-    @Published var alls: [Occ] = []          // 全天
+    @Published private(set) var snap = Snap()
     @Published var bad = false
     @Published var axis = false
     @Published var wing = true
+    private(set) var occs: [Occ] = []        // 有時間的 (排序好)
+    private(set) var alls: [Occ] = []
     let es = EKEventStore()
     let cl = Calendar.current
     let ud = UserDefaults.standard
+    var maxH: CGFloat = 800                  // 螢幕允許的最大高度 (AD 設定)
+    var nh: CGFloat = 32
+    private let q = DispatchQueue(label: "notchschedule.reload", qos: .userInitiated)
+    private var pend: DispatchWorkItem?
+    private var loadedBase = Date.distantPast
+
+    static let hourH: CGFloat = 34, cardH: CGFloat = 84, chipH: CGFloat = 18, chipMax = 3
 
     init() {
-        NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: es, queue: .main) { [weak self] _ in self?.refresh() }
+        NotificationCenter.default.addObserver(forName: .EKEventStoreChanged, object: es, queue: .main) { [weak self] _ in
+            self?.reloadSoon(0.5)
+        }
     }
 
-    // 本週週一
     var base: Date {
         let w = cl.component(.weekday, from: now)
         return cl.date(byAdding: .day, value: -((w + 5) % 7), to: cl.startOfDay(for: now))!
     }
-    // 顯示哪一週: 週末且這週已經沒東西了 -> 顯示下週
-    var mon: Date {
-        let b = base, w = cl.component(.weekday, from: now)
-        guard w == 1 || w == 7 else { return b }
-        let e = cl.date(byAdding: .day, value: 7, to: b)!
-        let left = occs.contains { $0.en > now && $0.st < e } || alls.contains { $0.en > now && $0.st < e }
-        return left ? b : e
-    }
-    func day(_ i: Int) -> Date { cl.date(byAdding: .day, value: i, to: mon)! }
-    func on(_ d: Date) -> [Occ] { occs.filter { cl.isDate($0.st, inSameDayAs: d) } }
-    func allOn(_ d: Date) -> [Occ] {
-        let e = cl.date(byAdding: .day, value: 1, to: d)!
-        return alls.filter { $0.st < e && $0.en > d }
-    }
-    // 要顯示的欄: 週一到五，週末有東西才出現
-    var cols: [Int] {
-        Array(0..<5) + [5, 6].filter { !on(day($0)).isEmpty || !allOn(day($0)).isEmpty }
-    }
-    var panelW: CGFloat { let w: [Int: CGFloat] = [5: 720, 6: 820, 7: 920]; return w[cols.count] ?? 720 }
-
+    func day(_ i: Int) -> Date { cl.date(byAdding: .day, value: i, to: snap.mon)! }
+    func on(_ i: Int) -> [Occ] { snap.byDay[i] ?? [] }
+    func allOn(_ i: Int) -> [Occ] { snap.allByDay[i] ?? [] }
     func isLive(_ o: Occ) -> Bool { o.st <= now && now < o.en }
     func mod(_ d: Date) -> CGFloat { CGFloat(cl.component(.hour, from: d) * 60 + cl.component(.minute, from: d)) }
 
@@ -71,55 +79,131 @@ final class M: ObservableObject {
         return nil
     }
 
-    var hours: (Int, Int) {
-        let w = cols.flatMap { on(day($0)) }
-        guard !w.isEmpty else { return (8, 18) }
-        let a = w.map { cl.component(.hour, from: $0.st) }.min()!
-        let b = w.map { cl.component(.hour, from: $0.en) + (cl.component(.minute, from: $0.en) > 0 ? 1 : 0) }.max()!
-        return (min(a, 8), min(max(b, a + 4), 24))
+    // 每 30 秒: 只更新時間 + 重算版面 (很便宜)；換週才重新讀資料
+    func tick() {
+        now = Date()
+        if base != loadedBase { reload() } else { derive() }
+    }
+
+    // 連續觸發時合併成一次
+    func reloadSoon(_ delay: Double = 0.25) {
+        pend?.cancel()
+        let w = DispatchWorkItem { [weak self] in self?.reload() }
+        pend = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: w)
+    }
+
+    // 在背景讀課表 + 行事曆，不卡畫面
+    func reload() {
+        now = Date()
+        let b0 = base, cal = ud.bool(forKey: "cal"), allday = ud.bool(forKey: "allday")
+        let hid = Set(ud.stringArray(forKey: "hiddenCals") ?? [])
+        let granted = EKEventStore.authorizationStatus(for: .event) == .fullAccess
+        q.async { [weak self] in
+            guard let self else { return }
+            let cl = self.cl
+            let (sf, bad) = loadSched()
+            let skip = Set(sf.skip ?? [])
+            var o: [Occ] = [], a: [Occ] = []
+            for wk in 0..<3 {
+                for c in sf.classes {
+                    let d = cl.date(byAdding: .day, value: 7 * wk + c.day - 1, to: b0)!
+                    let ds = ymd.string(from: d)
+                    if let s = sf.termStart, ds < s { continue }
+                    if let z = sf.termEnd, ds > z { continue }
+                    if skip.contains(ds) { continue }
+                    let st = self.at(d, c.start)
+                    o.append(Occ(id: "\(c.code)-\(Int(st.timeIntervalSince1970))", st: st, en: self.at(d, c.end),
+                                 c: c.code, n: c.name, k: c.type, r: c.room,
+                                 col: Color(hex: sf.colors[c.code] ?? "#C8C8C8"), url: c.url))
+                }
+            }
+            if cal && granted {
+                let cs = self.es.calendars(for: .event).filter { !hid.contains($0.calendarIdentifier) }
+                if !cs.isEmpty {
+                    let p = self.es.predicateForEvents(withStart: b0, end: cl.date(byAdding: .day, value: 21, to: b0)!, calendars: cs)
+                    for e in self.es.events(matching: p) {
+                        let long = e.endDate.timeIntervalSince(e.startDate) >= 12 * 3600
+                            || !cl.isDate(e.startDate, inSameDayAs: e.endDate.addingTimeInterval(-1))
+                        let top = e.isAllDay || long
+                        let x = Occ(id: "\(e.eventIdentifier ?? "ev")-\(Int(e.startDate.timeIntervalSince1970))",
+                                    st: e.startDate, en: e.endDate, c: e.title ?? "(無標題)", n: e.calendar.title,
+                                    k: e.isAllDay ? "全天" : "行事曆", r: e.location ?? "",
+                                    col: Color(nsColor: e.calendar.color).opacity(0.45),
+                                    url: e.url?.absoluteString, note: e.notes, all: top, multi: top && !e.isAllDay)
+                        if top { if allday { a.append(x) } } else { o.append(x) }
+                    }
+                }
+            }
+            o.sort { $0.st < $1.st }; a.sort { $0.st < $1.st }
+            DispatchQueue.main.async {
+                self.bad = bad; self.occs = o; self.alls = a; self.loadedBase = b0
+                self.derive()
+            }
+        }
+    }
+
+    // 算版面: 哪一週、哪幾欄、每天的事件、重疊並排、面板大小
+    func derive() {
+        axis = ud.bool(forKey: "axis"); wing = ud.bool(forKey: "wing")
+        var s = Snap()
+        let b = base, w = cl.component(.weekday, from: now)
+        let nextMon = cl.date(byAdding: .day, value: 7, to: b)!
+        // 週末且這週剩下沒有課/活動 -> 直接看下週
+        s.mon = (w == 1 || w == 7) && !occs.contains { $0.en > now && $0.st < nextMon } ? nextMon : b
+        let end = cl.date(byAdding: .day, value: 7, to: s.mon)!
+        let days = (0..<8).map { cl.date(byAdding: .day, value: $0, to: s.mon)! }
+
+        for o in occs where o.st >= s.mon && o.st < end {
+            let i = cl.dateComponents([.day], from: s.mon, to: cl.startOfDay(for: o.st)).day ?? 0
+            s.byDay[i, default: []].append(o)
+        }
+        for o in alls where o.st < end && o.en > s.mon {
+            for i in 0..<7 where o.st < days[i + 1] && o.en > days[i] { s.allByDay[i, default: []].append(o) }
+        }
+        s.cols = Array(0..<5) + [5, 6].filter { s.byDay[$0] != nil || s.allByDay[$0] != nil }
+        let wmap: [Int: CGFloat] = [5: 720, 6: 820, 7: 920]
+        s.panelW = wmap[s.cols.count] ?? 720
+        s.allMax = s.cols.map { min(s.allByDay[$0]?.count ?? 0, M.chipMax + 1) }.max() ?? 0
+
+        // 重疊的事件分成幾條並排
+        for (_, list) in s.byDay {
+            var ends: [Date] = [], group: [(String, Int)] = [], gEnd = Date.distantPast
+            func flush() { for (id, i) in group { s.lane[id] = Lane(i: i, n: max(ends.count, 1)) }; ends = []; group = [] }
+            for o in list {
+                if o.st >= gEnd { flush() }
+                if let l = ends.firstIndex(where: { $0 <= o.st }) { ends[l] = o.en; group.append((o.id, l)) }
+                else { ends.append(o.en); group.append((o.id, ends.count - 1)) }
+                gEnd = max(gEnd, o.en)
+            }
+            flush()
+        }
+
+        // 時間軸範圍
+        let timed = s.cols.flatMap { s.byDay[$0] ?? [] }
+        if !timed.isEmpty {
+            let a = timed.map { cl.component(.hour, from: $0.st) }.min()!
+            let z = timed.map { cl.component(.hour, from: $0.en) + (cl.component(.minute, from: $0.en) > 0 ? 1 : 0) }.max()!
+            s.hours = (min(a, 8), min(max(z, a + 4, 18), 24))
+        }
+
+        // 面板高度跟著內容走
+        let headH: CGFloat = 20 + CGFloat(s.allMax) * M.chipH
+        let body: CGFloat
+        if axis {
+            body = headH + CGFloat(s.hours.1 - s.hours.0) * M.hourH
+        } else {
+            let most = s.cols.map { s.byDay[$0]?.count ?? 0 }.max() ?? 0
+            body = headH + CGFloat(max(most, 1)) * M.cardH
+        }
+        let chrome = nh + 8 + 64 + 12 + 16 + (bad ? 18 : 0)
+        s.panelH = min(max(chrome + body, 300), maxH)
+        snap = s
     }
 
     func at(_ d: Date, _ s: String) -> Date {
         let x = mins(s)
         return cl.date(bySettingHour: x / 60, minute: x % 60, second: 0, of: d)!
-    }
-
-    func refresh() {
-        now = Date()
-        axis = ud.bool(forKey: "axis"); wing = ud.bool(forKey: "wing")
-        let (sf, b) = loadSched(); bad = b
-        let skip = Set(sf.skip ?? []), b0 = base
-        var o: [Occ] = [], a: [Occ] = []
-        for wk in 0..<3 {                                       // 這週起三週
-            for c in sf.classes {
-                let d = cl.date(byAdding: .day, value: 7 * wk + c.day - 1, to: b0)!
-                let ds = ymd.string(from: d)
-                if let s = sf.termStart, ds < s { continue }
-                if let z = sf.termEnd, ds > z { continue }
-                if skip.contains(ds) { continue }
-                let st = at(d, c.start)
-                o.append(Occ(id: "\(c.code)-\(Int(st.timeIntervalSince1970))", st: st, en: at(d, c.end),
-                             c: c.code, n: c.name, k: c.type, r: c.room,
-                             col: Color(hex: sf.colors[c.code] ?? "#C8C8C8"), url: c.url))
-            }
-        }
-        if ud.bool(forKey: "cal") && EKEventStore.authorizationStatus(for: .event) == .fullAccess {
-            let hid = Set(ud.stringArray(forKey: "hiddenCals") ?? [])
-            let cs = es.calendars(for: .event).filter { !hid.contains($0.calendarIdentifier) }
-            if !cs.isEmpty {
-                let p = es.predicateForEvents(withStart: b0, end: cl.date(byAdding: .day, value: 21, to: b0)!, calendars: cs)
-                for e in es.events(matching: p) {
-                    let x = Occ(id: "\(e.eventIdentifier ?? "ev")-\(Int(e.startDate.timeIntervalSince1970))",
-                                st: e.startDate, en: e.endDate, c: e.title ?? "(無標題)", n: e.calendar.title,
-                                k: e.isAllDay ? "全天" : "行事曆", r: e.location ?? "",
-                                col: Color(nsColor: e.calendar.color).opacity(0.45),
-                                url: e.url?.absoluteString, note: e.notes, all: e.isAllDay)
-                    if e.isAllDay { if ud.bool(forKey: "allday") { a.append(x) } } else { o.append(x) }
-                }
-            }
-        }
-        occs = o.sorted { $0.st < $1.st }
-        alls = a.sorted { $0.st < $1.st }
     }
 
     func requestCal(_ done: @escaping (Bool) -> Void) {
