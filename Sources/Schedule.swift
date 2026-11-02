@@ -1,8 +1,16 @@
-// 課表資料: 從 ~/Library/Application Support/NotchSchedule/schedule.json 讀取
+// 課表資料: ~/Library/Application Support/NotchSchedule/schedule.json
 import SwiftUI
 
-struct C: Codable { let day: Int; let start, end, code, name, type, room: String }  // day: 1=一 ... 5=五
-struct SFile: Codable { var colors: [String: String]; var classes: [C] }
+// day: 1=一 ... 5=五；url 可選，點卡片會打開（例如 Canvas 課程頁）
+struct C: Codable { let day: Int; let start, end, code, name, type, room: String; var url: String? = nil }
+
+struct SFile: Codable {
+    var colors: [String: String]
+    var classes: [C]
+    var termStart: String? = nil       // "2026-08-24"：這天之前不顯示課
+    var termEnd: String? = nil         // "2026-12-16"：這天之後不顯示課
+    var skip: [String]? = nil          // 放假日，例如 ["2026-11-26", "2026-11-27"]
+}
 
 let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     .appendingPathComponent("NotchSchedule")

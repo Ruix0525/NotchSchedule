@@ -1,44 +1,60 @@
-// 瀏海偵測、選單列圖示、上課前提醒
+// 瀏海偵測、選單、上課前提醒
 import SwiftUI
 import AppKit
 import UserNotifications
 import ServiceManagement
 
+// 一直掛在螢幕頂端的透明面板，收起時滑鼠可以穿透
 final class Panel: NSPanel {
     init(_ v: NSView) {
         super.init(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         isFloatingPanel = true
         level = .statusBar
-        backgroundColor = .clear; isOpaque = false; hasShadow = true
-        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        backgroundColor = .clear; isOpaque = false; hasShadow = false
+        collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         contentView = v
     }
     override var canBecomeKey: Bool { true }
 }
 
 final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
-    let m = M(), ud = UserDefaults.standard
+    let m = M(), u = UI(), ud = UserDefaults.standard
     var p: Panel!, si: NSStatusItem!, t: Timer?, t2: Timer?
-    var open = false, entered = false, holdUntil: Date?
+    var entered = false, holdUntil: Date?, hoverAt: Date?, outAt: Date?
     var menu = NSMenu()
     var sent = Set<String>()                                     // 已提醒過的課
-    let W: CGFloat = 720, H: CGFloat = 470
+    let W: CGFloat = 720, H: CGFloat = 500, pad: CGFloat = 30    // pad: 陰影留白
 
     var scr: NSScreen { NSScreen.screens.first { $0.safeAreaInsets.top > 0 } ?? NSScreen.main! }
-    var notch: NSRect {
-        let s = scr, f = s.frame
-        var w: CGFloat = 200
-        if let l = s.auxiliaryTopLeftArea, let r = s.auxiliaryTopRightArea { w = f.width - l.width - r.width }
-        let h = max(s.safeAreaInsets.top, 24)
-        return NSRect(x: f.midX - w / 2, y: f.maxY - h, width: w, height: h + 2)
+    var nw: CGFloat {
+        let s = scr
+        if let l = s.auxiliaryTopLeftArea, let r = s.auxiliaryTopRightArea { return s.frame.width - l.width - r.width }
+        return 200
+    }
+    var nh: CGFloat { max(scr.safeAreaInsets.top, 24) }
+    // 觸發區: 瀏海 (有倒數時含兩翼)
+    var zone: NSRect {
+        let f = scr.frame, w = nw + (m.wing && m.soon != nil ? 2 * Root.wingW : 0)
+        return NSRect(x: f.midX - w / 2, y: f.maxY - nh, width: w, height: nh + 2)
     }
     var full: NSRect { let f = scr.frame; return NSRect(x: f.midX - W / 2, y: f.maxY - H, width: W, height: H) }
 
+    func place() {
+        let f = scr.frame
+        u.nw = nw; u.nh = nh
+        p.setFrame(NSRect(x: f.midX - W / 2 - pad, y: f.maxY - H - pad, width: W + 2 * pad, height: H + pad), display: true)
+    }
+
     func applicationDidFinishLaunching(_ n: Notification) {
-        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false])
+        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "axis": false, "wing": true])
         NSApp.setActivationPolicy(.accessory)
         m.refresh()
-        p = Panel(NSHostingView(rootView: SchedView(m: m, top: max(scr.safeAreaInsets.top, 24), onMenu: { [weak self] in self?.popMenu() })))
+        p = Panel(NSHostingView(rootView: Root(m: m, u: u, W: W, H: H, onMenu: { [weak self] in self?.popMenu() })))
+        p.ignoresMouseEvents = true
+        place()
+        p.orderFrontRegardless()
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { [weak self] _ in self?.place() }
         buildMenu()
         let nc = UNUserNotificationCenter.current(); nc.delegate = self
         if ud.bool(forKey: "noti") { nc.requestAuthorization(options: [.alert, .sound]) { _, _ in } }
@@ -50,36 +66,36 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     func userNotificationCenter(_ c: UNUserNotificationCenter, willPresent n: UNNotification,
                                 withCompletionHandler h: @escaping (UNNotificationPresentationOptions) -> Void) { h([.banner, .sound]) }
 
-    // MARK: 滑鼠
+    // MARK: 滑鼠 (停 0.12 秒才打開，離開 0.25 秒才收起，避免誤觸)
     func tick() {
         let ms = NSEvent.mouseLocation
-        if !open { if notch.contains(ms) { show() }; return }
-        if full.insetBy(dx: -12, dy: -12).contains(ms) { entered = true; return }
-        if holdUntil == nil || entered || Date() > holdUntil! { hide() }
+        if !u.open {
+            if zone.contains(ms) {
+                if hoverAt == nil { hoverAt = Date() }
+                else if Date().timeIntervalSince(hoverAt!) > 0.12 { show() }
+            } else { hoverAt = nil }
+            return
+        }
+        if full.insetBy(dx: -12, dy: -12).contains(ms) { entered = true; outAt = nil; return }
+        if let h = holdUntil, !entered, Date() < h { return }
+        if outAt == nil { outAt = Date() }
+        else if Date().timeIntervalSince(outAt!) > 0.25 { hide() }
     }
 
-    // hold: 自動/選單打開時，滑鼠沒進來也先停留幾秒
+    // hold: 自動/選單打開時，滑鼠沒進來也停留幾秒
     func show(hold: TimeInterval? = nil) {
-        holdUntil = hold.map { Date().addingTimeInterval($0) }; entered = false
-        if open { return }
-        open = true
+        holdUntil = hold.map { Date().addingTimeInterval($0) }
+        entered = false; outAt = nil; hoverAt = nil
+        if u.open { return }
         m.refresh()
-        p.setFrame(full.offsetBy(dx: 0, dy: 12), display: false)
-        p.alphaValue = 0
-        p.orderFrontRegardless()
-        NSAnimationContext.runAnimationGroup { c in
-            c.duration = 0.18
-            p.animator().setFrame(full, display: true)
-            p.animator().alphaValue = 1
-        }
+        p.ignoresMouseEvents = false
+        u.open = true
     }
 
     func hide() {
-        open = false
-        NSAnimationContext.runAnimationGroup({ c in
-            c.duration = 0.15
-            p.animator().alphaValue = 0
-        }, completionHandler: { [weak self] in if self?.open == false { self?.p.orderOut(nil) } })
+        u.open = false
+        p.ignoresMouseEvents = true
+        hoverAt = nil; outAt = nil
     }
 
     // MARK: 上課前提醒
@@ -100,7 +116,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         }
     }
 
-    // MARK: 選單列
+    // MARK: 選單 (選單列圖示 & 面板齒輪共用)
     func item(_ t: String, _ a: Selector, _ k: String = "") -> NSMenuItem {
         let i = NSMenuItem(title: t, action: a, keyEquivalent: k); i.target = self; return i
     }
@@ -118,6 +134,9 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         mn.addItem(item("顯示課表", #selector(showMenu)))
         mn.addItem(item("編輯課表…", #selector(edit)))
         mn.addItem(.separator())
+        mn.addItem(check("時間軸模式", "axis"))
+        mn.addItem(check("瀏海倒數（上課前 15 分鐘起）", "wing"))
+        mn.addItem(.separator())
         let sub = NSMenu(), lead = ud.integer(forKey: "lead")
         for x in [0, 5, 10, 15, 30] {
             let i = item(x == 0 ? "關閉" : "\(x) 分鐘前", #selector(setLead(_:)))
@@ -130,6 +149,9 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         let lg = item("開機自動啟動", #selector(login)); lg.state = SMAppService.mainApp.status == .enabled ? .on : .off
         mn.addItem(lg)
         mn.addItem(.separator())
+        let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+        let vi = NSMenuItem(title: "NotchSchedule v\(v)", action: nil, keyEquivalent: ""); vi.isEnabled = false
+        mn.addItem(vi)
         mn.addItem(item("結束 NotchSchedule", #selector(quit), "q"))
         menu = mn; si.menu = mn
     }
