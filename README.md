@@ -13,6 +13,9 @@ Hover over your MacBook's notch to see your weekly class schedule.
 - Settings window: visual course editor (days, times, colors, rooms, links), term dates & holidays, calendar picker
 - Google Calendar via macOS Internet Accounts: all calendars, colors, all-day events, weekends, event details
 - Hide individual events or all events with the same title (restore in Settings)
+- Light / dark / auto theme with accent colors; week navigation
+- One-click import of UMN Twin Cities term dates and holidays from asr.umn.edu
+- Preview buttons for the notch countdown and reminders
 - Interactive onboarding tour with spotlight (replay in Settings → 一般)
 - Menu bar icon + gear button, launch at login
 

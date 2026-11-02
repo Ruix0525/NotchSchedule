@@ -46,15 +46,15 @@ struct Root: View {
     var onMenu: () -> Void
     static let wingW: CGFloat = 96
 
-    var act: Occ? { m.wing ? m.soon : nil }
+    var act: Occ? { m.demo ?? (m.wing ? m.soon : nil) }
 
     var body: some View {
-        let o = u.open, a = act, W = m.snap.panelW, H = m.snap.panelH
+        let o = u.open, a = act, W = m.snap.panelW, H = m.snap.panelH, t = m.theme
         let cw = o ? W : u.nw + (a != nil ? 2 * Root.wingW : 0)
         let shape = NotchShape(w: cw, h: o ? H : u.nh, r: o ? 22 : 10)
         ZStack(alignment: .top) {
             // 背景 + 陰影只畫在形狀上 (便宜)
-            shape.fill(o || a == nil ? Color.white : Color.black)
+            shape.fill(o || a == nil ? t.bg : Color.black)
                 .shadow(color: .black.opacity(o ? 0.22 : 0), radius: 16, y: 8)
             // 內容一直存在，只用遮罩露出來 -> 打開瞬間不用重建
             SchedView(m: m, open: o, top: u.nh, onMenu: onMenu)
@@ -63,7 +63,7 @@ struct Root: View {
                 .mask(shape)
                 .allowsHitTesting(o)
             if let a {
-                Wings(o: a, now: m.now, nw: u.nw, nh: u.nh)
+                Wings(o: a, now: m.now, nw: u.nw, nh: u.nh, ac: t.accent)
                     .frame(width: cw, height: u.nh)
                     .opacity(o ? 0 : 1)
             }
@@ -71,7 +71,7 @@ struct Root: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .overlayPreferenceValue(TourKey.self) { an in
             if o && u.tour != nil {
-                TourOverlay(u: u, an: an, W: W, H: H, nw: u.nw, nh: u.nh)
+                TourOverlay(u: u, an: an, W: W, H: H, nw: u.nw, nh: u.nh, t: m.theme)
                     .transition(.opacity)
             }
         }
@@ -80,13 +80,14 @@ struct Root: View {
         .animation(.spring(duration: 0.35, bounce: 0.1), value: W)
         .animation(.spring(duration: 0.35, bounce: 0.1), value: H)
         .animation(.easeInOut(duration: 0.3), value: a?.id)
-        .environment(\.colorScheme, .light)
+        .animation(.easeInOut(duration: 0.25), value: t)
+        .environment(\.colorScheme, t.dark ? .dark : .light)
     }
 }
 
 // MARK: - 收起時: 瀏海兩側倒數
 struct Wings: View {
-    let o: Occ; let now: Date; let nw, nh: CGFloat
+    let o: Occ; let now: Date; let nw, nh: CGFloat; let ac: Color
     var body: some View {
         let on = o.st <= now
         HStack(spacing: 0) {
@@ -97,7 +98,7 @@ struct Wings: View {
             .frame(width: Root.wingW - 10, alignment: .leading).padding(.leading, 10)
             Spacer().frame(width: nw)
             Text(on ? "剩 \(short(mleft(now, o.en)))" : "\(short(mleft(now, o.st)))後")
-                .font(.system(size: 11, weight: .bold)).foregroundStyle(on ? Color.orange : Color.cyan)
+                .font(.system(size: 11, weight: .bold)).foregroundStyle(on ? Color.orange : ac)
                 .lineLimit(1).minimumScaleFactor(0.7)
                 .frame(width: Root.wingW - 10, alignment: .trailing).padding(.trailing, 10)
         }
@@ -220,9 +221,9 @@ struct MoreChip: View {
     @State var pop = false
     var body: some View {
         Text("+\(list.count - M.chipMax) 個")
-            .font(.system(size: 9.5, weight: .medium)).foregroundStyle(.gray)
+            .font(.system(size: 9.5, weight: .medium)).foregroundStyle(.secondary)
             .frame(maxWidth: .infinity)
-            .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(pop ? 0.08 : 0.03)))
+            .background(RoundedRectangle(cornerRadius: 4).fill(Color.primary.opacity(pop ? 0.1 : 0.04)))
             .contentShape(Rectangle())
             .onTapGesture { pop = true }
             .popover(isPresented: $pop, arrowEdge: .bottom) {
@@ -244,21 +245,24 @@ struct MoreChip: View {
     }
 }
 
-// MARK: - 齒輪 (大一點、有 hover 回饋)
-struct GearButton: View {
+// MARK: - 圓形圖示按鈕 (齒輪、換週)
+struct IconBtn: View {
+    let icon: String; let t: Theme
+    var size: CGFloat = 13
+    var help = ""
+    var disabled = false
     var action: () -> Void
     @State var hov = false
     var body: some View {
-        Image(systemName: "gearshape.fill")
-            .font(.system(size: 15, weight: .medium))
-            .foregroundStyle(hov ? Color.black.opacity(0.75) : Color.gray)
-            .frame(width: 32, height: 32)
-            .background(Circle().fill(Color.black.opacity(hov ? 0.09 : 0.04)))
+        Image(systemName: icon)
+            .font(.system(size: size, weight: .semibold))
+            .foregroundStyle(disabled ? t.sub.opacity(0.4) : hov ? t.fg : t.sub)
+            .frame(width: 30, height: 30)
+            .background(Circle().fill(t.fg.opacity(hov && !disabled ? 0.1 : 0.05)))
             .contentShape(Circle())
             .onHover { hov = $0 }
-            .onTapGesture { action() }
-            .help("設定")
-            .tour("gear")
+            .onTapGesture { if !disabled { action() } }
+            .help(help)
     }
 }
 
@@ -271,7 +275,7 @@ struct DayTop: View {
         VStack(spacing: 2) {
             Text("\(wd[i]) \(df.string(from: d))")
                 .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Calendar.current.isDateInToday(d) ? Color.orange : Color.black.opacity(0.6))
+                .foregroundStyle(Calendar.current.isDateInToday(d) ? m.theme.accent : m.theme.sub)
                 .frame(height: 18)
             ForEach(list.prefix(M.chipMax)) { o in AllDayChip(o: o).frame(height: M.chipH - 2) }
             if list.count > M.chipMax {
@@ -302,7 +306,7 @@ struct AxisGrid: View {
             HStack(alignment: .top, spacing: sp) {
                 VStack(spacing: 0) {
                     Color.clear.frame(height: 20)
-                    if m.snap.allMax > 0 { Text("全天").font(.system(size: 9)).foregroundStyle(.gray) }
+                    if m.snap.allMax > 0 { Text("全天").font(.system(size: 9)).foregroundStyle(m.theme.sub) }
                 }
                 .frame(width: gut)
                 ForEach(cs, id: \.self) { i in DayTop(m: m, i: i) }
@@ -315,9 +319,9 @@ struct AxisGrid: View {
                             VStack(spacing: 0) {
                                 ForEach(hr.0..<hr.1, id: \.self) { h in
                                     HStack(alignment: .top, spacing: 0) {
-                                        Text(h == 12 ? "12" : "\(h % 12)").font(.system(size: 9)).foregroundStyle(.gray)
+                                        Text(h == 12 ? "12" : "\(h % 12)").font(.system(size: 9)).foregroundStyle(m.theme.sub)
                                             .frame(width: gut, alignment: .leading).offset(y: -5)
-                                        Rectangle().fill(Color.black.opacity(0.07)).frame(height: 1)
+                                        Rectangle().fill(m.theme.line).frame(height: 1)
                                     }
                                     .frame(height: hh, alignment: .top)
                                     .id(h)
@@ -360,33 +364,62 @@ struct SchedView: View {
     let top: CGFloat
     var onMenu: () -> Void
 
+    var weekLabel: String {
+        let a = m.day(0), b = m.day(6), cl = Calendar.current
+        let base = m.base, d = cl.dateComponents([.day], from: base, to: a).day ?? 0
+        let tag = [0: "本週", 7: "下週", -7: "上週", 14: "下下週"][d] ?? ""
+        return "\(df.string(from: a)) – \(df.string(from: b))" + (tag.isEmpty ? "" : "  ·  " + tag)
+    }
+
+    // 上方工具列: 週次 + 換週 + 齒輪 (在選單列下面，不會太貼頂)
+    var toolbar: some View {
+        let t = m.theme
+        return HStack(spacing: 6) {
+            Text(weekLabel).font(.system(size: 13, weight: .semibold)).foregroundStyle(t.fg)
+            if m.wkOff != 0 {
+                Text("回到本週").font(.system(size: 11, weight: .medium)).foregroundStyle(t.accent)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(Capsule().fill(t.accent.opacity(0.12)))
+                    .onTapGesture { m.wkOff = 0; m.derive() }
+            }
+            Spacer()
+            IconBtn(icon: "chevron.left", t: t, help: "上一週", disabled: m.wkOff <= -1) { m.shift(-1) }
+            IconBtn(icon: "chevron.right", t: t, help: "下一週", disabled: m.wkOff >= 2) { m.shift(1) }
+            IconBtn(icon: "gearshape.fill", t: t, size: 14, help: "設定", action: onMenu)
+                .tour("gear")
+                .padding(.leading, 4)
+        }
+        .frame(height: 30)
+    }
+
     var banner: some View {
-        HStack {
+        let t = m.theme
+        return HStack {
             if let o = m.live {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(o.isClass ? "● 上課中" : "● 進行中").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.orange)
                     Text("\(o.c) \(o.k == "行事曆" ? "" : o.k)").font(.system(size: 14, weight: .bold))
-                    Text("\(o.r.isEmpty ? "" : o.r + " · ")\(tma(o.en)) 結束").font(.system(size: 11)).foregroundStyle(.gray)
+                    Text("\(o.r.isEmpty ? "" : o.r + " · ")\(tma(o.en)) 結束").font(.system(size: 11)).foregroundStyle(t.sub)
                 }
                 Spacer()
                 Text("還剩 \(dur(mleft(m.now, o.en)))").font(.system(size: 17, weight: .bold)).foregroundStyle(.orange)
             } else if let o = m.next {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(o.isClass ? "下一堂課" : "下一個行程").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.blue)
+                    Text(o.isClass ? "下一堂課" : "下一個行程").font(.system(size: 10.5, weight: .bold)).foregroundStyle(t.accent)
                     Text("\(o.c) \(o.k == "行事曆" ? "" : o.k)").font(.system(size: 14, weight: .bold))
-                    Text("\(dayName(o.st)) \(tma(o.st))\(o.r.isEmpty ? "" : " · " + o.r)").font(.system(size: 11)).foregroundStyle(.gray)
+                    Text("\(dayName(o.st)) \(tma(o.st))\(o.r.isEmpty ? "" : " · " + o.r)").font(.system(size: 11)).foregroundStyle(t.sub)
                 }
                 Spacer()
-                Text("\(dur(mleft(m.now, o.st)))後").font(.system(size: 17, weight: .bold)).foregroundStyle(.blue)
+                Text("\(dur(mleft(m.now, o.st)))後").font(.system(size: 17, weight: .bold)).foregroundStyle(t.accent)
             } else {
-                Text("最近沒有課 🎉").font(.system(size: 13)).foregroundStyle(.gray)
+                Text("最近沒有課 🎉").font(.system(size: 13)).foregroundStyle(t.sub)
                 Spacer()
             }
         }
         .lineLimit(1)
-        .foregroundStyle(.black)
+        .foregroundStyle(t.fg)
         .padding(.horizontal, 14).frame(height: 64)
-        .background((m.live != nil ? Color.orange : Color.blue).opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+        .background((m.live != nil ? Color.orange : t.accent).opacity(t.dark ? 0.16 : 0.09), in: RoundedRectangle(cornerRadius: 12))
         .tour("banner")
     }
 
@@ -403,23 +436,20 @@ struct SchedView: View {
     }
 
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 10) {
+            toolbar
             if m.bad {
                 Text("⚠️ 課表檔案格式有誤，先顯示範例（齒輪 → 設定）")
                     .font(.system(size: 11)).foregroundStyle(.red).frame(height: 14)
             }
-            banner
+            banner.padding(.bottom, 2)
             if m.axis {
                 AxisGrid(m: m, open: open)
             } else {
                 ScrollView(.vertical, showsIndicators: false) { list }.tour("grid")
             }
         }
-        .padding(.horizontal, 14).padding(.top, top + 8).padding(.bottom, 14)
+        .padding(.horizontal, 16).padding(.top, top + 8).padding(.bottom, 14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        .overlay(alignment: .topTrailing) {
-            GearButton(action: onMenu)
-                .padding(.top, max((top - 32) / 2, 0)).padding(.trailing, 12)
-        }
     }
 }

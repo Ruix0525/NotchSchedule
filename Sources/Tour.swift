@@ -5,7 +5,7 @@ struct TourStep { let id, icon, title, text: String }
 
 let tourSteps: [TourStep] = [
     TourStep(id: "notch", icon: "hand.point.up.left.fill", title: "從瀏海打開",
-             text: "把滑鼠移到瀏海停一下，課表就會從這裡長出來；移開就自動收起。上課前 15 分鐘，瀏海兩側還會顯示倒數。"),
+             text: "把滑鼠移到瀏海停一下，課表就會從這裡長出來；移開就自動收起。上課前 15 分鐘，瀏海兩側還會顯示倒數（設定 → 一般 → 預覽 可以先看效果）。"),
     TourStep(id: "banner", icon: "bell.badge.fill", title: "下一堂課",
              text: "這裡永遠告訴你：現在在上什麼課、或下一堂課是什麼時候、在哪裡、還有多久。"),
     TourStep(id: "header", icon: "sun.max.fill", title: "全天活動",
@@ -14,8 +14,8 @@ let tourSteps: [TourStep] = [
              text: "課表和 Google 行事曆的活動都在這裡。時間重疊的會並排，紅線是現在時間，已經結束的會變淡。"),
     TourStep(id: "card", icon: "cursorarrow.click.2", title: "點卡片看詳情",
              text: "點任何一張卡片可以看時間、地點、備註和連結。不想看到的行事曆活動，可以在這裡「隱藏這次」或「隱藏所有同名活動」。"),
-    TourStep(id: "gear", icon: "gearshape.fill", title: "設定",
-             text: "齒輪可以打開設定：用圖形介面編輯課表、選擇要顯示哪些日曆、切換時間軸、設定上課前提醒。"),
+    TourStep(id: "gear", icon: "gearshape.fill", title: "換週與設定",
+             text: "旁邊的箭頭可以看上一週和下一週。齒輪打開設定：編輯課表、選擇日曆、換主題色、抓學校行事曆、設定上課前提醒。"),
     TourStep(id: "done", icon: "checkmark.seal.fill", title: "準備好了！",
              text: "之後想再看一次，到「設定 → 一般 → 重播新手教學」就可以。"),
 ]
@@ -49,6 +49,7 @@ struct TourOverlay: View {
     @ObservedObject var u: UI
     let an: [String: [Anchor<CGRect>]]
     let W, H, nw, nh: CGFloat
+    let t: Theme
 
     func rect(_ g: GeometryProxy, _ id: String, _ panel: CGRect) -> CGRect {
         if id == "notch" { return CGRect(x: g.size.width / 2 - nw / 2 - 10, y: -6, width: nw + 20, height: nh + 12) }
@@ -78,8 +79,8 @@ struct TourOverlay: View {
                 // 2. 發光外框 (會呼吸)
                 if step.id != "done" {
                     RoundedRectangle(cornerRadius: 12)
-                        .stroke(Color.accentColor, lineWidth: 2.5)
-                        .shadow(color: .accentColor.opacity(0.8), radius: 10)
+                        .stroke(t.accent, lineWidth: 2.5)
+                        .shadow(color: t.accent.opacity(0.8), radius: 10)
                         .frame(width: r.width, height: r.height)
                         .phaseAnimator([false, true]) { v, on in
                             v.scaleEffect(on ? 1.025 : 1).opacity(on ? 0.55 : 1)
@@ -91,14 +92,14 @@ struct TourOverlay: View {
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(.white)
                         .padding(.horizontal, 10).padding(.vertical, 5)
-                        .background(Capsule().fill(Color.accentColor))
+                        .background(Capsule().fill(t.accent))
                         .shadow(color: .black.opacity(0.25), radius: 6, y: 2)
                         .position(x: min(max(r.midX, panel.minX + 90), panel.maxX - 90),
                                   y: tagAbove ? r.minY - 18 : r.maxY + 18)
                         .allowsHitTesting(false)
                 }
                 // 4. 固定位置的說明卡
-                TourCard(u: u, st: st)
+                TourCard(u: u, st: st, t: t)
                     .position(x: g.size.width / 2, y: cardY)
             }
             .animation(.spring(duration: 0.55, bounce: 0.2), value: st)
@@ -109,12 +110,13 @@ struct TourOverlay: View {
 struct TourCard: View {
     @ObservedObject var u: UI
     let st: Int
+    let t: Theme
     var body: some View {
-        let step = tourSteps[st], last = st == tourSteps.count - 1
+        let step = tourSteps[st], last = st == tourSteps.count - 1, ac = t.accent
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 10) {
-                Image(systemName: step.icon).font(.system(size: 18)).foregroundStyle(Color.accentColor)
-                    .frame(width: 34, height: 34).background(Circle().fill(Color.accentColor.opacity(0.12)))
+                Image(systemName: step.icon).font(.system(size: 18)).foregroundStyle(ac)
+                    .frame(width: 34, height: 34).background(Circle().fill(ac.opacity(0.14)))
                 VStack(alignment: .leading, spacing: 1) {
                     Text("新手教學 \(st + 1) / \(tourSteps.count)").font(.system(size: 10.5)).foregroundStyle(.secondary)
                     Text(step.title).font(.system(size: 15, weight: .bold))
@@ -129,21 +131,20 @@ struct TourCard: View {
             HStack {
                 HStack(spacing: 5) {
                     ForEach(0..<tourSteps.count, id: \.self) { i in
-                        Capsule().fill(i == st ? Color.accentColor : Color.secondary.opacity(0.3))
+                        Capsule().fill(i == st ? ac : Color.secondary.opacity(0.3))
                             .frame(width: i == st ? 16 : 6, height: 6)
                     }
                 }
                 Spacer()
                 if st > 0 { Button("上一步") { u.tour = st - 1 }.buttonStyle(.bordered) }
                 Button(last ? "開始使用" : "下一步") { if last { u.endTour() } else { u.tour = st + 1 } }
-                    .buttonStyle(.borderedProminent).keyboardShortcut(.defaultAction)
+                    .buttonStyle(.borderedProminent).tint(ac).keyboardShortcut(.defaultAction)
             }
         }
         .padding(18)
         .frame(width: 440)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.white))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.black.opacity(0.06)))
-        .shadow(color: .black.opacity(0.25), radius: 20, y: 8)
-        .environment(\.colorScheme, .light)
+        .background(RoundedRectangle(cornerRadius: 16).fill(t.bg))
+        .overlay(RoundedRectangle(cornerRadius: 16).stroke(t.fg.opacity(0.08)))
+        .shadow(color: .black.opacity(0.3), radius: 20, y: 8)
     }
 }

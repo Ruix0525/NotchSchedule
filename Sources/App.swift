@@ -68,6 +68,13 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         NotificationCenter.default.addObserver(forName: .nsTour, object: nil, queue: .main) { [weak self] _ in
             self?.sw?.orderOut(nil); self?.startTour()
         }
+        NotificationCenter.default.addObserver(forName: .nsDemo, object: nil, queue: .main) { [weak self] _ in self?.demoWings() }
+        NotificationCenter.default.addObserver(forName: .nsDemoRemind, object: nil, queue: .main) { [weak self] _ in self?.demoRemind() }
+        // 系統切換淺色/深色 -> 主題跟著換
+        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
+                                                            object: nil, queue: .main) { [weak self] _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { self?.m.derive() }
+        }
         if !ud.bool(forKey: "tourDone") {                       // 第一次開: 自動教學
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.startTour() }
         }
@@ -120,8 +127,36 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
 
     func hide() {
         u.open = false
+        if m.wkOff != 0 { m.wkOff = 0; m.derive() }            // 下次打開回到本週
         p.ignoresMouseEvents = true
         hoverAt = nil; outAt = nil
+    }
+
+    // 倒數預覽: 先「8 分後」再「剩 25 分」
+    func sample(_ st: Date, _ en: Date) -> Occ {
+        let s = m.occs.first { $0.isClass }
+        return Occ(id: "demo-\(Int(st.timeIntervalSince1970))", st: st, en: en, c: s?.c ?? "PHYS 2201", n: s?.n ?? "",
+                   k: s?.k ?? "Lecture", r: s?.r ?? "Tate Hall 105", col: s?.col ?? Color(hex: "#E0E680"), isClass: true)
+    }
+    func demoWings() {
+        hide(); m.tick()
+        let n = Date()
+        m.demo = sample(n.addingTimeInterval(8 * 60), n.addingTimeInterval(58 * 60))
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) { [weak self] in
+            self?.m.demo = self?.sample(n.addingTimeInterval(-25 * 60), n.addingTimeInterval(25 * 60))
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 7) { [weak self] in self?.m.demo = nil }
+    }
+    func demoRemind() {
+        let o = sample(Date().addingTimeInterval(Double(max(ud.integer(forKey: "lead"), 1)) * 60), Date().addingTimeInterval(3600))
+        if ud.bool(forKey: "noti") {
+            let c = UNMutableNotificationContent()
+            c.title = "（預覽）\(ud.integer(forKey: "lead")) 分鐘後：\(o.c) \(o.k)"
+            c.body = "\(tma(o.st)) – \(tma(o.en)) · \(o.r)"
+            c.sound = .default
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: o.id, content: c, trigger: nil))
+        }
+        if ud.bool(forKey: "pop") { show(hold: 5) }
     }
 
     func startTour() {
@@ -130,7 +165,8 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     }
 
     func sig() -> String {
-        ["lead", "pop", "noti", "cal", "allday", "axis", "wing", "evRemind", "hiddenCals", "hiddenTitles", "hiddenIds"]
+        ["lead", "pop", "noti", "cal", "allday", "axis", "wing", "evRemind", "hiddenCals", "hiddenTitles", "hiddenIds",
+         "appearance", "accent"]
             .map { "\(ud.object(forKey: $0) ?? "-")" }.joined(separator: "|")
     }
 
@@ -217,7 +253,11 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     @objc func quit() { NSApp.terminate(nil) }
 }
 
-extension Notification.Name { static let nsTour = Notification.Name("NotchScheduleReplayTour") }
+extension Notification.Name {
+    static let nsTour = Notification.Name("NotchScheduleReplayTour")
+    static let nsDemo = Notification.Name("NotchScheduleDemoWings")
+    static let nsDemoRemind = Notification.Name("NotchScheduleDemoRemind")
+}
 
 @main enum Main {
     static let ad = AD()

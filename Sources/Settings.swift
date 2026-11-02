@@ -294,8 +294,62 @@ struct MeetingRow: View {
 struct TermTab: View {
     @ObservedObject var s: Store
     @State var pick = Date()
+    @State var busy = false
+    @State var found: UMNTerm?
+    @State var err: String?
+
+    func fetch() {
+        busy = true; err = nil; found = nil
+        Task {
+            do {
+                let f = try await UMN.fetch()
+                await MainActor.run { found = f; busy = false }
+            } catch {
+                await MainActor.run { err = error.localizedDescription; busy = false }
+            }
+        }
+    }
+    func apply(_ f: UMNTerm) {
+        s.termStart = f.start
+        s.termEnd = f.end
+        s.termOn = true
+        s.holidays = Array(Set(s.holidays + f.holidays)).sorted()
+        found = nil
+    }
+
     var body: some View {
         Form {
+            Section {
+                HStack(spacing: 12) {
+                    Image(systemName: "building.columns.fill").font(.system(size: 22)).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("University of Minnesota – Twin Cities").fontWeight(.semibold)
+                        Text("從官方行事曆抓本學期的開學日、最後上課日和假日").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if busy { ProgressView().controlSize(.small) }
+                    Button(busy ? "抓取中…" : "抓取最新日期") { fetch() }.disabled(busy)
+                }
+                if let f = found {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(f.name).font(.headline)
+                        Label("上課期間：\(ldf.string(from: f.start)) – \(ldf.string(from: f.end))", systemImage: "calendar")
+                        Label(f.holidays.isEmpty ? "期間內沒有放假日" : "放假：" + f.holidays.map { df.string(from: $0) }.joined(separator: "、"),
+                              systemImage: "sun.max")
+                        HStack {
+                            Link("查看來源網頁", destination: f.src).font(.caption)
+                            Spacer()
+                            Button("取消") { found = nil }
+                            Button("套用") { apply(f) }.buttonStyle(.borderedProminent)
+                        }
+                    }
+                    .padding(10)
+                    .background(Color.accentColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
+                if let e = err {
+                    Label(e, systemImage: "exclamationmark.triangle.fill").foregroundStyle(.orange).font(.caption)
+                }
+            } header: { Text("從學校匯入") }
             Section {
                 Toggle("只在學期期間顯示課程", isOn: $s.termOn)
                 if s.termOn {
@@ -434,6 +488,8 @@ struct CalTab: View {
 
 // MARK: 一般
 struct GeneralTab: View {
+    @AppStorage("appearance") var appearance = 0
+    @AppStorage("accent") var accent = "#0A84FF"
     @AppStorage("lead") var lead = 10
     @AppStorage("pop") var pop = true
     @AppStorage("noti") var noti = true
@@ -443,13 +499,40 @@ struct GeneralTab: View {
 
     var body: some View {
         Form {
+            Section("外觀") {
+                Picker("主題", selection: $appearance) {
+                    Text("跟隨系統").tag(0)
+                    Text("淺色").tag(1)
+                    Text("深色").tag(2)
+                }
+                .pickerStyle(.segmented)
+                HStack {
+                    Text("強調色")
+                    Spacer()
+                    ForEach(accents.indices, id: \.self) { i in
+                        let a = accents[i]
+                        Circle().fill(Color(hex: a.1)).frame(width: 22, height: 22)
+                            .overlay(Circle().stroke(Color.primary.opacity(accent == a.1 ? 0.85 : 0), lineWidth: 2).padding(-3))
+                            .contentShape(Circle())
+                            .onTapGesture { accent = a.1 }
+                            .help(a.0)
+                    }
+                }
+            }
             Section("顯示") {
                 Picker("課表樣式", selection: $axis) {
                     Text("卡片列表").tag(false)
                     Text("時間軸").tag(true)
                 }
                 .pickerStyle(.segmented)
-                Toggle("瀏海倒數（開始前 15 分鐘起，在瀏海兩側顯示）", isOn: $wing)
+                HStack {
+                    Toggle("瀏海倒數（開始前 15 分鐘起，在瀏海兩側顯示）", isOn: $wing)
+                    Spacer()
+                    Button { NotificationCenter.default.post(name: .nsDemo, object: nil) } label: {
+                        Label("預覽", systemImage: "play.fill")
+                    }
+                    .help("看看瀏海倒數的樣子：先顯示「上課前」，再顯示「上課中」")
+                }
             }
             Section("開始前提醒") {
                 Picker("提前", selection: $lead) {
@@ -457,7 +540,14 @@ struct GeneralTab: View {
                     ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) 分鐘").tag($0) }
                 }
                 Toggle("自動彈出課表", isOn: $pop).disabled(lead == 0)
-                Toggle("發送系統通知", isOn: $noti).disabled(lead == 0)
+                HStack {
+                    Toggle("發送系統通知", isOn: $noti).disabled(lead == 0)
+                    Spacer()
+                    Button { NotificationCenter.default.post(name: .nsDemoRemind, object: nil) } label: {
+                        Label("預覽提醒", systemImage: "bell.fill")
+                    }
+                    .disabled(lead == 0)
+                }
                     .onChange(of: noti) { _, v in
                         if v { UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in } }
                     }

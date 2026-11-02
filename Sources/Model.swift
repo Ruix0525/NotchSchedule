@@ -1,5 +1,6 @@
 // 資料層: 背景讀取課表 + 行事曆，算好版面再交給畫面 (避免卡頓)
 import SwiftUI
+import AppKit
 import EventKit
 
 struct Occ: Identifiable {
@@ -22,7 +23,20 @@ func hideEvent(_ o: Occ, all: Bool) {
     if !a.contains(v) { a.append(v); ud.set(a, forKey: k) }
 }
 
-struct Lane { let i, n: Int }                // 重疊事件並排: 第 i 條 / 共 n 條
+struct Lane { let i, n: Int }
+
+// 主題: 淺色 / 深色 + 強調色
+struct Theme: Equatable {
+    var dark = false
+    var accent = Color(hex: "#0A84FF")
+    var bg: Color { dark ? Color(red: 0.11, green: 0.11, blue: 0.12) : .white }
+    var fg: Color { dark ? .white : .black }
+    var sub: Color { dark ? Color.white.opacity(0.55) : Color.black.opacity(0.5) }
+    var line: Color { dark ? Color.white.opacity(0.09) : Color.black.opacity(0.07) }
+    var soft: Color { dark ? Color.white.opacity(0.07) : Color.black.opacity(0.04) }
+}
+let accents: [(String, String)] = [("藍", "#0A84FF"), ("靛", "#5E5CE6"), ("紫", "#BF5AF2"), ("粉", "#FF375F"),
+                                   ("橘", "#FF9F0A"), ("綠", "#30D158"), ("青", "#40C8E0")]                // 重疊事件並排: 第 i 條 / 共 n 條
 
 // 每次資料或時間變動時「一次算好」的版面資料
 struct Snap {
@@ -54,6 +68,9 @@ final class M: ObservableObject {
     @Published var bad = false
     @Published var axis = false
     @Published var wing = true
+    @Published var theme = Theme()
+    @Published var wkOff = 0                 // 0 = 本週, 1 = 下週, -1 = 上週
+    @Published var demo: Occ?                // 倒數預覽用
     private(set) var occs: [Occ] = []        // 有時間的 (排序好)
     private(set) var alls: [Occ] = []
     private(set) var foc: [Occ] = []         // 倒數/提醒/上方提示 會看的 (預設只有課)
@@ -92,6 +109,8 @@ final class M: ObservableObject {
         return nil
     }
 
+    func shift(_ d: Int) { wkOff = max(-1, min(wkOff + d, 2)); derive() }
+
     // 每 30 秒: 只更新時間 + 重算版面 (很便宜)；換週才重新讀資料
     func tick() {
         now = Date()
@@ -119,7 +138,7 @@ final class M: ObservableObject {
             let (sf, bad) = loadSched()
             let skip = Set(sf.skip ?? [])
             var o: [Occ] = [], a: [Occ] = []
-            for wk in 0..<3 {
+            for wk in -1..<3 {                                   // 上週 ~ 下下週
                 for c in sf.classes {
                     let d = cl.date(byAdding: .day, value: 7 * wk + c.day - 1, to: b0)!
                     let ds = ymd.string(from: d)
@@ -135,7 +154,8 @@ final class M: ObservableObject {
             if cal && granted {
                 let cs = self.es.calendars(for: .event).filter { !hid.contains($0.calendarIdentifier) }
                 if !cs.isEmpty {
-                    let p = self.es.predicateForEvents(withStart: b0, end: cl.date(byAdding: .day, value: 21, to: b0)!, calendars: cs)
+                    let p = self.es.predicateForEvents(withStart: cl.date(byAdding: .day, value: -7, to: b0)!,
+                                                       end: cl.date(byAdding: .day, value: 21, to: b0)!, calendars: cs)
                     for e in self.es.events(matching: p) {
                         let id = "\(e.eventIdentifier ?? "ev")-\(Int(e.startDate.timeIntervalSince1970))"
                         if hT.contains(e.title ?? "") || hI.contains(id) { continue }
@@ -145,7 +165,8 @@ final class M: ObservableObject {
                         let x = Occ(id: id,
                                     st: e.startDate, en: e.endDate, c: e.title ?? "(無標題)", n: e.calendar.title,
                                     k: e.isAllDay ? "全天" : "行事曆", r: e.location ?? "",
-                                    col: Color(nsColor: e.calendar.color).opacity(0.45),
+                                    col: Color(nsColor: (e.calendar.color.usingColorSpace(.sRGB) ?? .gray)
+                                                .blended(withFraction: 0.5, of: .white) ?? .gray),
                                     url: e.url?.absoluteString, note: e.notes, all: top, multi: top && !e.isAllDay)
                         if top { if allday { a.append(x) } } else { o.append(x) }
                     }
@@ -163,11 +184,16 @@ final class M: ObservableObject {
     func derive() {
         axis = ud.bool(forKey: "axis"); wing = ud.bool(forKey: "wing")
         foc = ud.bool(forKey: "evRemind") ? occs : occs.filter { $0.isClass }
+        let ap = ud.integer(forKey: "appearance")            // 0 跟隨系統 1 淺色 2 深色
+        let sysDark = NSApp.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let t = Theme(dark: ap == 2 || (ap == 0 && sysDark), accent: Color(hex: ud.string(forKey: "accent") ?? "#0A84FF"))
+        if t != theme { theme = t }
         var s = Snap()
         let b = base, w = cl.component(.weekday, from: now)
         let nextMon = cl.date(byAdding: .day, value: 7, to: b)!
         // 週末且這週剩下沒有課/活動 -> 直接看下週
-        s.mon = (w == 1 || w == 7) && !occs.contains { $0.en > now && $0.st < nextMon } ? nextMon : b
+        let home = (w == 1 || w == 7) && !occs.contains { $0.en > now && $0.st < nextMon } ? nextMon : b
+        s.mon = cl.date(byAdding: .day, value: 7 * wkOff, to: home)!
         let end = cl.date(byAdding: .day, value: 7, to: s.mon)!
         let days = (0..<8).map { cl.date(byAdding: .day, value: $0, to: s.mon)! }
 
@@ -213,7 +239,7 @@ final class M: ObservableObject {
             let most = s.cols.map { s.byDay[$0]?.count ?? 0 }.max() ?? 0
             body = headH + CGFloat(max(most, 1)) * M.cardH
         }
-        let chrome = nh + 8 + 64 + 12 + 16 + (bad ? 18 : 0)
+        let chrome = nh + 8 + 30 + 10 + 64 + 12 + 16 + (bad ? 26 : 0)
         s.panelH = min(max(chrome + body, 300), maxH)
         snap = s
     }
