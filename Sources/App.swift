@@ -198,6 +198,14 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         NSApp.activate(ignoringOtherApps: true)
         if a.runModal() == .alertFirstButtonReturn { doUpdate() }
     }
+    func alert(_ title: String, _ message: String) {
+        let a = NSAlert()
+        a.messageText = title
+        a.informativeText = message
+        a.addButton(withTitle: "好")
+        NSApp.activate(ignoringOtherApps: true)
+        a.runModal()
+    }
     func doUpdate() {
         guard let url = u.newURL, !u.updating else { return }
         u.updating = true
