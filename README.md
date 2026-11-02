@@ -12,6 +12,8 @@ Hover over your MacBook's notch to see your weekly class schedule.
 - Term dates and holidays (`termStart`, `termEnd`, `skip`), per-class links (`url`)
 - Settings window: visual course editor (days, times, colors, rooms, links), term dates & holidays, calendar picker
 - Google Calendar via macOS Internet Accounts: all calendars, colors, all-day events, weekends, event details
+- Hide individual events or all events with the same title (restore in Settings)
+- Interactive onboarding tour with spotlight (replay in Settings → 一般)
 - Menu bar icon + gear button, launch at login
 
 ## Requirements

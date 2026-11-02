@@ -69,6 +69,12 @@ struct Root: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .overlayPreferenceValue(TourKey.self) { an in
+            if o && u.tour != nil {
+                TourOverlay(u: u, an: an, W: W, H: H, nw: u.nw, nh: u.nh)
+                    .transition(.opacity)
+            }
+        }
         .opacity(o || a != nil ? 1 : 0)
         .animation(.spring(duration: 0.42, bounce: 0.16), value: o)
         .animation(.spring(duration: 0.35, bounce: 0.1), value: W)
@@ -122,6 +128,15 @@ struct Detail: View {
             if let s = o.url, let x = URL(string: s) {
                 Button { NSWorkspace.shared.open(x) } label: { Label("打開連結", systemImage: "arrow.up.right.square") }
             }
+            if !o.isClass {
+                Divider()
+                HStack(spacing: 12) {
+                    Button { hideEvent(o, all: false) } label: { Label("隱藏這次", systemImage: "eye.slash") }
+                    Button { hideEvent(o, all: true) } label: { Label("隱藏所有同名", systemImage: "eye.slash.fill") }
+                }
+                .buttonStyle(.borderless).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                Text("可在 設定 → 行事曆 → 已隱藏的活動 恢復").font(.system(size: 10)).foregroundStyle(.tertiary)
+            }
         }
         .font(.system(size: 12))
         .padding(14)
@@ -153,6 +168,7 @@ struct Card: View {
         .contentShape(Rectangle())
         .onTapGesture { pop = true }
         .popover(isPresented: $pop, arrowEdge: .bottom) { Detail(o: o) }
+        .tour("card")
     }
 }
 
@@ -177,6 +193,7 @@ struct MiniCard: View {
         .contentShape(Rectangle())
         .onTapGesture { pop = true }
         .popover(isPresented: $pop, arrowEdge: .trailing) { Detail(o: o) }
+        .tour("card")
     }
 }
 
@@ -197,6 +214,36 @@ struct AllDayChip: View {
     }
 }
 
+// MARK: - 「+N 個」: 點開看全部全天活動
+struct MoreChip: View {
+    let list: [Occ]
+    @State var pop = false
+    var body: some View {
+        Text("+\(list.count - M.chipMax) 個")
+            .font(.system(size: 9.5, weight: .medium)).foregroundStyle(.gray)
+            .frame(maxWidth: .infinity)
+            .background(RoundedRectangle(cornerRadius: 4).fill(Color.black.opacity(pop ? 0.08 : 0.03)))
+            .contentShape(Rectangle())
+            .onTapGesture { pop = true }
+            .popover(isPresented: $pop, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("全天 / 跨日活動").font(.headline)
+                    ForEach(list) { o in
+                        HStack(spacing: 8) {
+                            RoundedRectangle(cornerRadius: 2).fill(o.col).frame(width: 4, height: 16)
+                            Text(o.c).lineLimit(1)
+                            Spacer()
+                            Button { hideEvent(o, all: true) } label: { Image(systemName: "eye.slash") }
+                                .buttonStyle(.borderless).foregroundStyle(.secondary).help("隱藏所有同名活動")
+                        }
+                        .font(.system(size: 12))
+                    }
+                }
+                .padding(14).frame(width: 280)
+            }
+    }
+}
+
 // MARK: - 齒輪 (大一點、有 hover 回饋)
 struct GearButton: View {
     var action: () -> Void
@@ -211,6 +258,7 @@ struct GearButton: View {
             .onHover { hov = $0 }
             .onTapGesture { action() }
             .help("設定")
+            .tour("gear")
     }
 }
 
@@ -227,10 +275,11 @@ struct DayTop: View {
                 .frame(height: 18)
             ForEach(list.prefix(M.chipMax)) { o in AllDayChip(o: o).frame(height: M.chipH - 2) }
             if list.count > M.chipMax {
-                Text("+\(list.count - M.chipMax) 個").font(.system(size: 9.5)).foregroundStyle(.gray).frame(height: M.chipH - 2)
+                MoreChip(list: list).frame(height: M.chipH - 2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .top)
+        .tour("header")
     }
 }
 
@@ -251,7 +300,11 @@ struct AxisGrid: View {
         let hr = m.snap.hours, cs = m.snap.cols, hh = M.hourH
         VStack(spacing: 4) {
             HStack(alignment: .top, spacing: sp) {
-                Color.clear.frame(width: gut, height: 1)
+                VStack(spacing: 0) {
+                    Color.clear.frame(height: 20)
+                    if m.snap.allMax > 0 { Text("全天").font(.system(size: 9)).foregroundStyle(.gray) }
+                }
+                .frame(width: gut)
                 ForEach(cs, id: \.self) { i in DayTop(m: m, i: i) }
             }
             GeometryReader { g in
@@ -295,6 +348,7 @@ struct AxisGrid: View {
                     .onChange(of: open) { _, v in if v { pr.scrollTo(target, anchor: .top) } }
                 }
             }
+            .tour("grid")
         }
     }
 }
@@ -310,7 +364,7 @@ struct SchedView: View {
         HStack {
             if let o = m.live {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("● 正在進行").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.orange)
+                    Text(o.isClass ? "● 上課中" : "● 進行中").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.orange)
                     Text("\(o.c) \(o.k == "行事曆" ? "" : o.k)").font(.system(size: 14, weight: .bold))
                     Text("\(o.r.isEmpty ? "" : o.r + " · ")\(tma(o.en)) 結束").font(.system(size: 11)).foregroundStyle(.gray)
                 }
@@ -318,14 +372,14 @@ struct SchedView: View {
                 Text("還剩 \(dur(mleft(m.now, o.en)))").font(.system(size: 17, weight: .bold)).foregroundStyle(.orange)
             } else if let o = m.next {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("下一個").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.blue)
+                    Text(o.isClass ? "下一堂課" : "下一個行程").font(.system(size: 10.5, weight: .bold)).foregroundStyle(.blue)
                     Text("\(o.c) \(o.k == "行事曆" ? "" : o.k)").font(.system(size: 14, weight: .bold))
                     Text("\(dayName(o.st)) \(tma(o.st))\(o.r.isEmpty ? "" : " · " + o.r)").font(.system(size: 11)).foregroundStyle(.gray)
                 }
                 Spacer()
                 Text("\(dur(mleft(m.now, o.st)))後").font(.system(size: 17, weight: .bold)).foregroundStyle(.blue)
             } else {
-                Text("最近沒有行程 🎉").font(.system(size: 13)).foregroundStyle(.gray)
+                Text("最近沒有課 🎉").font(.system(size: 13)).foregroundStyle(.gray)
                 Spacer()
             }
         }
@@ -333,6 +387,7 @@ struct SchedView: View {
         .foregroundStyle(.black)
         .padding(.horizontal, 14).frame(height: 64)
         .background((m.live != nil ? Color.orange : Color.blue).opacity(0.09), in: RoundedRectangle(cornerRadius: 12))
+        .tour("banner")
     }
 
     var list: some View {
@@ -357,7 +412,7 @@ struct SchedView: View {
             if m.axis {
                 AxisGrid(m: m, open: open)
             } else {
-                ScrollView(.vertical, showsIndicators: false) { list }
+                ScrollView(.vertical, showsIndicators: false) { list }.tour("grid")
             }
         }
         .padding(.horizontal, 14).padding(.top, top + 8).padding(.bottom, 14)

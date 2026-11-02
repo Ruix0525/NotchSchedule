@@ -51,7 +51,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "allday": true, "axis": false, "wing": true])
+        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "allday": true, "axis": false, "wing": true, "evRemind": false])
         NSApp.setActivationPolicy(.accessory)
         store.onSave = { [weak self] in self?.m.reloadSoon() }
         p = Panel(NSHostingView(rootView: Root(m: m, u: u, onMenu: { [weak self] in self?.popMenu() })))
@@ -60,6 +60,17 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         p.orderFrontRegardless()
         m.reload()
         lastSig = sig()
+        u.onTourEnd = { [weak self] in
+            guard let self else { return }
+            self.ud.set(true, forKey: "tourDone")
+            self.holdUntil = Date().addingTimeInterval(2); self.entered = false
+        }
+        NotificationCenter.default.addObserver(forName: .nsTour, object: nil, queue: .main) { [weak self] _ in
+            self?.sw?.orderOut(nil); self?.startTour()
+        }
+        if !ud.bool(forKey: "tourDone") {                       // 第一次開: 自動教學
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.startTour() }
+        }
         let nc0 = NotificationCenter.default
         nc0.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in self?.place() }
         // 只有「我們的」設定真的變了才重新整理 (系統常常會發這個通知)
@@ -82,6 +93,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     // MARK: 滑鼠
     func tick() {
         let ms = NSEvent.mouseLocation
+        if u.tour != nil { return }                              // 教學中不自動收起
         if !u.open {
             if zone.contains(ms) {
                 if hoverAt == nil { hoverAt = Date() }
@@ -112,15 +124,20 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         hoverAt = nil; outAt = nil
     }
 
+    func startTour() {
+        u.tour = 0
+        show(hold: 3600)
+    }
+
     func sig() -> String {
-        ["lead", "pop", "noti", "cal", "allday", "axis", "wing", "hiddenCals"]
+        ["lead", "pop", "noti", "cal", "allday", "axis", "wing", "evRemind", "hiddenCals", "hiddenTitles", "hiddenIds"]
             .map { "\(ud.object(forKey: $0) ?? "-")" }.joined(separator: "|")
     }
 
     // MARK: 開始前提醒
     func remind() {
         let lead = ud.integer(forKey: "lead"); guard lead > 0 else { return }
-        for o in m.occs where !sent.contains(o.id) {
+        for o in m.foc where !sent.contains(o.id) {
             let x = o.st.timeIntervalSinceNow
             guard x > 0 && x <= Double(lead * 60) else { continue }
             sent.insert(o.id)
@@ -169,6 +186,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         let mn = NSMenu()
         mn.addItem(item("顯示課表", #selector(showMenu)))
         mn.addItem(item("設定…", #selector(openSettings), ","))
+        mn.addItem(item("新手教學", #selector(tourMenu)))
         mn.addItem(.separator())
         mn.addItem(check("時間軸模式", "axis"))
         mn.addItem(check("瀏海倒數", "wing"))
@@ -195,8 +213,11 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         }
         ud.set(v, forKey: k)
     }
+    @objc func tourMenu() { startTour() }
     @objc func quit() { NSApp.terminate(nil) }
 }
+
+extension Notification.Name { static let nsTour = Notification.Name("NotchScheduleReplayTour") }
 
 @main enum Main {
     static let ad = AD()

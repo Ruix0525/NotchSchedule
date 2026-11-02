@@ -11,6 +11,15 @@ struct Occ: Identifiable {
     var note: String? = nil
     var all = false                          // 顯示在上方小條 (全天 / 跨日 / 超長)
     var multi = false                        // 跨日或超長的「有時間」事件
+    var isClass = false                      // 課表裡的課 (不是行事曆活動)
+}
+
+// 隱藏行事曆活動: 單次 or 同名全部
+func hideEvent(_ o: Occ, all: Bool) {
+    let ud = UserDefaults.standard
+    let k = all ? "hiddenTitles" : "hiddenIds", v = all ? o.c : o.id
+    var a = ud.stringArray(forKey: k) ?? []
+    if !a.contains(v) { a.append(v); ud.set(a, forKey: k) }
 }
 
 struct Lane { let i, n: Int }                // 重疊事件並排: 第 i 條 / 共 n 條
@@ -30,6 +39,9 @@ struct Snap {
 
 final class UI: ObservableObject {
     @Published var open = false
+    @Published var tour: Int? = nil          // 新手教學進行到第幾步
+    var onTourEnd: (() -> Void)?
+    func endTour() { tour = nil; onTourEnd?() }
     @Published var nw: CGFloat = 200
     @Published var nh: CGFloat = 32
 }
@@ -44,6 +56,7 @@ final class M: ObservableObject {
     @Published var wing = true
     private(set) var occs: [Occ] = []        // 有時間的 (排序好)
     private(set) var alls: [Occ] = []
+    private(set) var foc: [Occ] = []         // 倒數/提醒/上方提示 會看的 (預設只有課)
     let es = EKEventStore()
     let cl = Calendar.current
     let ud = UserDefaults.standard
@@ -71,8 +84,8 @@ final class M: ObservableObject {
     func isLive(_ o: Occ) -> Bool { o.st <= now && now < o.en }
     func mod(_ d: Date) -> CGFloat { CGFloat(cl.component(.hour, from: d) * 60 + cl.component(.minute, from: d)) }
 
-    var live: Occ? { occs.first { isLive($0) } }
-    var next: Occ? { occs.first { $0.st > now } }
+    var live: Occ? { foc.first { isLive($0) } }
+    var next: Occ? { foc.first { $0.st > now } }
     var soon: Occ? {
         if let l = live { return l }
         if let x = next, x.st.timeIntervalSince(now) <= 15 * 60 { return x }
@@ -98,6 +111,7 @@ final class M: ObservableObject {
         now = Date()
         let b0 = base, cal = ud.bool(forKey: "cal"), allday = ud.bool(forKey: "allday")
         let hid = Set(ud.stringArray(forKey: "hiddenCals") ?? [])
+        let hT = Set(ud.stringArray(forKey: "hiddenTitles") ?? []), hI = Set(ud.stringArray(forKey: "hiddenIds") ?? [])
         let granted = EKEventStore.authorizationStatus(for: .event) == .fullAccess
         q.async { [weak self] in
             guard let self else { return }
@@ -115,7 +129,7 @@ final class M: ObservableObject {
                     let st = self.at(d, c.start)
                     o.append(Occ(id: "\(c.code)-\(Int(st.timeIntervalSince1970))", st: st, en: self.at(d, c.end),
                                  c: c.code, n: c.name, k: c.type, r: c.room,
-                                 col: Color(hex: sf.colors[c.code] ?? "#C8C8C8"), url: c.url))
+                                 col: Color(hex: sf.colors[c.code] ?? "#C8C8C8"), url: c.url, isClass: true))
                 }
             }
             if cal && granted {
@@ -123,10 +137,12 @@ final class M: ObservableObject {
                 if !cs.isEmpty {
                     let p = self.es.predicateForEvents(withStart: b0, end: cl.date(byAdding: .day, value: 21, to: b0)!, calendars: cs)
                     for e in self.es.events(matching: p) {
+                        let id = "\(e.eventIdentifier ?? "ev")-\(Int(e.startDate.timeIntervalSince1970))"
+                        if hT.contains(e.title ?? "") || hI.contains(id) { continue }
                         let long = e.endDate.timeIntervalSince(e.startDate) >= 12 * 3600
                             || !cl.isDate(e.startDate, inSameDayAs: e.endDate.addingTimeInterval(-1))
                         let top = e.isAllDay || long
-                        let x = Occ(id: "\(e.eventIdentifier ?? "ev")-\(Int(e.startDate.timeIntervalSince1970))",
+                        let x = Occ(id: id,
                                     st: e.startDate, en: e.endDate, c: e.title ?? "(無標題)", n: e.calendar.title,
                                     k: e.isAllDay ? "全天" : "行事曆", r: e.location ?? "",
                                     col: Color(nsColor: e.calendar.color).opacity(0.45),
@@ -146,6 +162,7 @@ final class M: ObservableObject {
     // 算版面: 哪一週、哪幾欄、每天的事件、重疊並排、面板大小
     func derive() {
         axis = ud.bool(forKey: "axis"); wing = ud.bool(forKey: "wing")
+        foc = ud.bool(forKey: "evRemind") ? occs : occs.filter { $0.isClass }
         var s = Snap()
         let b = base, w = cl.component(.weekday, from: now)
         let nextMon = cl.date(byAdding: .day, value: 7, to: b)!

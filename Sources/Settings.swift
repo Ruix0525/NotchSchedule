@@ -336,6 +336,13 @@ struct CalTab: View {
     @AppStorage("allday") var allDay = true
     @State var status = EKEventStore.authorizationStatus(for: .event)
     @State var hidden = Set(UserDefaults.standard.stringArray(forKey: "hiddenCals") ?? [])
+    @AppStorage("evRemind") var evRemind = false
+    @State var hT: [String] = []
+    @State var hI: [String] = []
+    func loadHidden() {
+        hT = UserDefaults.standard.stringArray(forKey: "hiddenTitles") ?? []
+        hI = UserDefaults.standard.stringArray(forKey: "hiddenIds") ?? []
+    }
 
     func request() {
         m.requestCal { ok in
@@ -358,7 +365,8 @@ struct CalTab: View {
             Section {
                 Toggle("在瀏海課表顯示行事曆", isOn: $calOn)
                     .onChange(of: calOn) { _, v in if v { request() } else { m.reloadSoon() } }
-                Toggle("顯示全天事件", isOn: $allDay).disabled(!calOn)
+                Toggle("顯示全天 / 跨日活動（日期下方的小色條）", isOn: $allDay).disabled(!calOn)
+                Toggle("倒數、提醒和「下一堂」也算行事曆活動", isOn: $evRemind).disabled(!calOn)
                 if status == .denied || status == .restricted {
                     HStack {
                         Text("沒有行事曆權限").foregroundStyle(.red)
@@ -384,6 +392,32 @@ struct CalTab: View {
                     }
                 }
             }
+            if calOn {
+                Section("已隱藏的活動") {
+                    if hT.isEmpty && hI.isEmpty {
+                        Text("在課表上點活動 → 隱藏，就會出現在這裡。").foregroundStyle(.secondary)
+                    }
+                    ForEach(hT, id: \.self) { t in
+                        HStack {
+                            Image(systemName: "eye.slash").foregroundStyle(.secondary)
+                            Text(t)
+                            Text("（所有同名）").foregroundStyle(.secondary)
+                            Spacer()
+                            Button("恢復") {
+                                hT.removeAll { $0 == t }
+                                UserDefaults.standard.set(hT, forKey: "hiddenTitles")
+                            }
+                        }
+                    }
+                    if !hI.isEmpty {
+                        HStack {
+                            Text("單次隱藏的活動 \(hI.count) 個")
+                            Spacer()
+                            Button("全部恢復") { hI = []; UserDefaults.standard.set(hI, forKey: "hiddenIds") }
+                        }
+                    }
+                }
+            }
             Section("加入 Google 行事曆") {
                 Text("1. 打開「網際網路帳號」，登入你的 Google 帳號\n2. 確認「行事曆」有打開\n3. 回到這裡，勾選要顯示的日曆")
                     .font(.callout)
@@ -393,7 +427,8 @@ struct CalTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { status = EKEventStore.authorizationStatus(for: .event) }
+        .onAppear { status = EKEventStore.authorizationStatus(for: .event); loadHidden() }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in loadHidden() }
     }
 }
 
@@ -433,6 +468,11 @@ struct GeneralTab: View {
                         if v { try? SMAppService.mainApp.register() } else { try? SMAppService.mainApp.unregister() }
                         login = SMAppService.mainApp.status == .enabled
                     }
+                HStack {
+                    Text("新手教學")
+                    Spacer()
+                    Button("重播") { NotificationCenter.default.post(name: .nsTour, object: nil) }
+                }
                 HStack {
                     Text("進階：課表檔案 schedule.json")
                     Spacer()
