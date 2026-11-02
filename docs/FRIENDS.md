@@ -2,7 +2,7 @@
 
 ## 安裝（不用碰程式碼）
 
-1. 把 `NotchSchedule.zip` 解壓縮，把 **NotchSchedule.app** 拖進「應用程式」資料夾。
+1. 下載最新版：**[NotchSchedule.zip](https://github.com/Ruix0525/NotchSchedule/releases/latest/download/NotchSchedule.zip)**，解壓縮後把 **NotchSchedule.app** 拖進「應用程式」資料夾。
 2. 打開「終端機」，貼上這行再按 Enter（因為 App 沒有 Apple 付費簽章，第一次要解除隔離）：
 
    ```
@@ -19,6 +19,11 @@
 4. 回到設定，點 **匯入 → ② 從剪貼簿匯入**，選「取代目前的課表」。
 
 匯入後可以直接在設定裡改顏色、時間、教室。
+
+## 更新
+
+不用管它：App 每 6 小時會自動檢查，有新版就在你沒在用的時候自動下載、安裝、重新打開，完成後會跳通知。
+想手動更新：齒輪 → 檢查更新。不想自動裝：設定 → 一般 → 更新。課表和設定都不會不見。
 
 ## Google 行事曆
 

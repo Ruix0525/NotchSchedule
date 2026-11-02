@@ -31,4 +31,9 @@ if [ "$1" == "push" ]; then
     git commit -m "v$V" || echo "（沒有新變更）"
     git push
     echo "☁️ 已上傳 GitHub：v$V"
+    # 新版本 -> 打 tag，GitHub 會自動打包發佈到 Releases (朋友從連結下載)
+    if ! git rev-parse "v$V" >/dev/null 2>&1; then
+        git tag "v$V" && git push origin "v$V"
+        echo "🚀 已發佈 v$V，幾分鐘後朋友就能從 Releases 下載"
+    fi
 fi

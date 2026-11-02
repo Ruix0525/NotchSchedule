@@ -55,6 +55,9 @@ final class UI: ObservableObject {
     @Published var open = false
     @Published var tour: Int? = nil          // 新手教學進行到第幾步
     var onTourEnd: (() -> Void)?
+    @Published var newVer: String?           // GitHub 上有新版
+    var newURL: URL?
+    @Published var updating = false
     func endTour() { tour = nil; onTourEnd?() }
     @Published var nw: CGFloat = 200
     @Published var nh: CGFloat = 32

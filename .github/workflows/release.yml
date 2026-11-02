@@ -1,0 +1,24 @@
+# 推一個 v 開頭的 tag (例如 v0.8.1) -> GitHub 自動編譯通用版並發佈到 Releases
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build universal app
+        run: |
+          chmod +x build.sh
+          ./build.sh dist
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/NotchSchedule.zip
+          generate_release_notes: true

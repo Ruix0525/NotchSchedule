@@ -518,6 +518,8 @@ struct GeneralTab: View {
     @AppStorage("wing") var wing = true
     @AppStorage("weekStart") var weekStart = 0
     @AppStorage("weekend") var weekend = true
+    @AppStorage("autoUpdate") var autoUpdate = true
+    @AppStorage("autoInstall") var autoInstall = true
     @State var login = SMAppService.mainApp.status == .enabled
 
     var body: some View {
@@ -580,6 +582,15 @@ struct GeneralTab: View {
                     .onChange(of: noti) { _, v in
                         if v { UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in } }
                     }
+            }
+            Section("更新") {
+                HStack {
+                    Text("目前版本 v\(Updater.current)")
+                    Spacer()
+                    Button("檢查更新") { NotificationCenter.default.post(name: .nsCheckUpdate, object: nil) }
+                }
+                Toggle("自動檢查新版（每 6 小時）", isOn: $autoUpdate)
+                Toggle("有新版時自動安裝（沒在用的時候）", isOn: $autoInstall).disabled(!autoUpdate)
             }
             Section("其他") {
                 Toggle("開機自動啟動", isOn: $login)

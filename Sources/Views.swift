@@ -58,7 +58,7 @@ struct Root: View {
             shape.fill(o || a == nil ? t.bg : Color.black)
                 .shadow(color: .black.opacity(o ? 0.22 : 0), radius: 16, y: 8)
             // 內容一直存在，只用遮罩露出來 -> 打開瞬間不用重建
-            SchedView(m: m, open: o, top: u.nh, onMenu: onMenu)
+            SchedView(m: m, u: u, open: o, top: u.nh, onMenu: onMenu)
                 .frame(width: W, height: H)
                 .opacity(o ? 1 : 0)
                 .mask(shape)
@@ -393,6 +393,7 @@ struct AxisGrid: View {
 // MARK: - 展開後的內容
 struct SchedView: View {
     @ObservedObject var m: M
+    @ObservedObject var u: UI
     let open: Bool
     let top: CGFloat
     var onMenu: () -> Void
@@ -414,6 +415,14 @@ struct SchedView: View {
                     .onTapGesture { m.wkOff = 0; m.derive() }
             }
             Spacer()
+            if let v = u.newVer {                                     // 有新版: 點一下就更新
+                Label(u.updating ? "更新中…" : "新版 v\(v)", systemImage: "arrow.down.circle.fill")
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Capsule().fill(t.accent))
+                    .onTapGesture { NotificationCenter.default.post(name: .nsUpdate, object: nil) }
+                    .help("下載並安裝新版，App 會自動重新打開")
+            }
             IconBtn(icon: "chevron.left", t: t, help: "上一週", disabled: m.wkOff <= -1) { m.shift(-1) }
             IconBtn(icon: "chevron.right", t: t, help: "下一週", disabled: m.wkOff >= 2) { m.shift(1) }
             IconBtn(icon: t.dark ? "sun.max.fill" : "moon.fill", t: t, help: t.dark ? "切換成淺色" : "切換成深色") {

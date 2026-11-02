@@ -51,7 +51,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
     }
 
     func applicationDidFinishLaunching(_ n: Notification) {
-        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "allday": true, "axis": false, "wing": true, "evRemind": false, "weekStart": 0, "weekend": true, "schoolShow": true, "schoolAuto": true])
+        ud.register(defaults: ["lead": 10, "pop": true, "noti": true, "cal": false, "allday": true, "axis": false, "wing": true, "evRemind": false, "weekStart": 0, "weekend": true, "schoolShow": true, "schoolAuto": true, "autoUpdate": true, "autoInstall": true])
         NSApp.setActivationPolicy(.accessory)
         store.onSave = { [weak self] in self?.m.reloadSoon() }
         p = Panel(NSHostingView(rootView: Root(m: m, u: u, onMenu: { [weak self] in self?.popMenu() })))
@@ -69,6 +69,8 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
             self?.sw?.orderOut(nil); self?.startTour()
         }
         NotificationCenter.default.addObserver(forName: .nsDemo, object: nil, queue: .main) { [weak self] _ in self?.demoWings() }
+        NotificationCenter.default.addObserver(forName: .nsUpdate, object: nil, queue: .main) { [weak self] _ in self?.doUpdate() }
+        NotificationCenter.default.addObserver(forName: .nsCheckUpdate, object: nil, queue: .main) { [weak self] _ in self?.checkUpdate(manual: true) }
         NotificationCenter.default.addObserver(forName: .nsDemoRemind, object: nil, queue: .main) { [weak self] _ in self?.demoRemind() }
         // 系統切換淺色/深色 -> 主題跟著換
         DistributedNotificationCenter.default().addObserver(forName: Notification.Name("AppleInterfaceThemeChangedNotification"),
@@ -91,9 +93,17 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         if ud.bool(forKey: "noti") { nc.requestAuthorization(options: [.alert, .sound]) { _, _ in } }
         t = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in self?.tick() }
         t2 = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
-            self?.m.tick(); self?.remind(); self?.autoSchool()
+            self?.m.tick(); self?.remind(); self?.autoSchool(); self?.checkUpdate()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.autoSchool() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in self?.checkUpdate() }
+        if ud.bool(forKey: "justUpdated") {                          // 剛自動更新完 -> 通知一下
+            ud.set(false, forKey: "justUpdated")
+            let c = UNMutableNotificationContent()
+            c.title = "NotchSchedule 已更新到 v\(Updater.current)"
+            c.body = "新功能已經可以用了 🎉"
+            UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "updated", content: c, trigger: nil))
+        }
         remind()
     }
 
@@ -161,6 +171,47 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         }
         if ud.bool(forKey: "pop") { show(hold: 5) }
     }
+
+    // MARK: 自動更新 (每 6 小時檢查一次 GitHub Releases)
+    func checkUpdate(manual: Bool = false) {
+        guard manual || ud.bool(forKey: "autoUpdate") else { return }
+        if !manual && Date().timeIntervalSince1970 - ud.double(forKey: "updChecked") < 6 * 3600 { return }
+        ud.set(Date().timeIntervalSince1970, forKey: "updChecked")
+        Task {
+            let r = await Updater.check()
+            await MainActor.run {
+                self.u.newVer = r?.0; self.u.newURL = r?.1
+                self.buildMenu()
+                if manual && r == nil { self.alert("已經是最新版", "目前版本 v\(Updater.current)") }
+                else if manual, let v = r?.0 { self.ask(v) }
+                else if r != nil && self.ud.bool(forKey: "autoInstall") && !self.u.open && self.sw?.isVisible != true {
+                    self.doUpdate()                                  // 沒在用的時候自動裝
+                }
+            }
+        }
+    }
+    func ask(_ v: String) {
+        let a = NSAlert()
+        a.messageText = "有新版 v\(v)"
+        a.informativeText = "目前是 v\(Updater.current)。要現在更新嗎？App 會自動重新打開。"
+        a.addButton(withTitle: "更新"); a.addButton(withTitle: "稍後")
+        NSApp.activate(ignoringOtherApps: true)
+        if a.runModal() == .alertFirstButtonReturn { doUpdate() }
+    }
+    func doUpdate() {
+        guard let url = u.newURL, !u.updating else { return }
+        u.updating = true
+        Task {
+            do { try await Updater.install(url) }
+            catch {
+                await MainActor.run {
+                    self.u.updating = false
+                    self.alert("更新失敗", error.localizedDescription + "\n可以到 GitHub 手動下載最新版。")
+                }
+            }
+        }
+    }
+    @objc func updateMenu() { if u.newVer != nil { doUpdate() } else { checkUpdate(manual: true) } }
 
     // 每週自動從 UMN 更新一次學校行事曆
     var fetchingSchool = false
@@ -242,6 +293,7 @@ final class AD: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegat
         mn.addItem(item("顯示課表", #selector(showMenu)))
         mn.addItem(item("設定…", #selector(openSettings), ","))
         mn.addItem(item("新手教學", #selector(tourMenu)))
+        mn.addItem(item(u.newVer.map { "⬆️ 更新到 v\($0)" } ?? "檢查更新…", #selector(updateMenu)))
         mn.addItem(.separator())
         mn.addItem(check("時間軸模式", "axis"))
         mn.addItem(check("瀏海倒數", "wing"))
@@ -276,6 +328,8 @@ extension Notification.Name {
     static let nsTour = Notification.Name("NotchScheduleReplayTour")
     static let nsDemo = Notification.Name("NotchScheduleDemoWings")
     static let nsDemoRemind = Notification.Name("NotchScheduleDemoRemind")
+    static let nsUpdate = Notification.Name("NotchScheduleUpdate")
+    static let nsCheckUpdate = Notification.Name("NotchScheduleCheckUpdate")
 }
 
 @main enum Main {
