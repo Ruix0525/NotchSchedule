@@ -10,6 +10,8 @@ Hover over your MacBook's notch to see your weekly class schedule.
 - Reminder before class: auto pop-up and/or macOS notification (5/10/15/30 min)
 - Events from macOS Calendar, including Google Calendar accounts
 - Term dates and holidays (`termStart`, `termEnd`, `skip`), per-class links (`url`)
+- Settings window: visual course editor (days, times, colors, rooms, links), term dates & holidays, calendar picker
+- Google Calendar via macOS Internet Accounts: all calendars, colors, all-day events, weekends, event details
 - Menu bar icon + gear button, launch at login
 
 ## Requirements
@@ -24,7 +26,7 @@ Hover over your MacBook's notch to see your weekly class schedule.
 ```
 
 ## Schedule format
-Gear button → 編輯課表… (`~/Library/Application Support/NotchSchedule/schedule.json`)
+Use the Settings window (gear → 設定…). Advanced: the data lives in `~/Library/Application Support/NotchSchedule/schedule.json`
 
 ```json
 {
@@ -41,4 +43,4 @@ Gear button → 編輯課表… (`~/Library/Application Support/NotchSchedule/sc
 `day`: 1 = Mon … 5 = Fri, times in 24h `HH:mm`. `url` is optional. Changes apply within 30 s.
 
 ## Google Calendar
-System Settings → Internet Accounts → add Google, enable Calendars. Then gear → 顯示行事曆事件.
+System Settings → Internet Accounts → add Google, enable Calendars. Then gear → 設定… → 行事曆, and pick which calendars to show.
